@@ -1,0 +1,7 @@
+.env
+*.pyc
+__pycache__/
+.venv/
+n8n_data/
+postgres_data/
+ollama_data/

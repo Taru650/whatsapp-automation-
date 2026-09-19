@@ -1,0 +1,6 @@
+category,name,phone,location,lat,lon,hours,notes
+control_room,"PLACEHOLDER - District Control Room (Saran)","PLACEHOLDER-0000000000","PLACEHOLDER - e.g. Collectorate, Chapra",,,24x7,"REPLACE with verified number from the District Magistrate/Mela Adhikari office before going live"
+police,"PLACEHOLDER - Sonpur Mela Temporary Police Station 1","PLACEHOLDER-0000000000","PLACEHOLDER - e.g. Near Hariharnath Mandir gate",,,24x7,"REPLACE with verified data from SP office Mela arrangements order"
+medical,"PLACEHOLDER - Temporary Medical Camp 1","PLACEHOLDER-0000000000","PLACEHOLDER - e.g. Mela ground Sector A",,,24x7,"REPLACE with verified data from Civil Surgeon / Health Dept Mela order"
+veterinary,"PLACEHOLDER - Temporary Veterinary Camp 1","PLACEHOLDER-0000000000","PLACEHOLDER - e.g. Cattle fair ground",,,"Mela hours","REPLACE with verified data from Animal Husbandry Dept"
+law_order,"PLACEHOLDER - Sector Magistrate / Law & Order desk","PLACEHOLDER-0000000000","PLACEHOLDER",,,24x7,"REPLACE with verified data from district administration"
