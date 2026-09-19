@@ -1,10 +1,39 @@
 # n8n setup — Sonpur Mela WhatsApp bot
 
-This imports as a starting point, not a guaranteed drop-in. n8n's node
-schemas evolve between versions; on import it may prompt you to upgrade a
-few nodes (IF, HTTP Request, Postgres are the ones most likely to shift).
-Accept the upgrade and spot-check the node still matches what's described
-below — don't assume it's byte-perfect for whatever n8n version you're on.
+## What's actually been tested
+
+This workflow has been run end-to-end against a real (non-mocked) n8n
+instance, real Postgres/pgvector, and a stubbed-out LLM (Ollama itself
+couldn't be pulled in the test sandbox — network policy blocked it — so
+the embedding/generation calls were verified against a mock with the same
+API shape, not verified for real answer quality). All of the following
+were exercised and confirmed working: the WhatsApp verify handshake
+(both correct- and wrong-token cases), the direct-lookup path, the RAG
+retrieval + prompt-assembly path, the low-confidence fallback, and the
+non-text/status-callback ack path. Three real bugs were found and fixed
+this way, not by inspection:
+
+1. **`N8N_BLOCK_ENV_ACCESS_IN_NODE`** — n8n blocks `$env.*` access from
+   node expressions by default. Every node in this workflow that reads
+   config via `$env` (verify token, control room number, model names,
+   WhatsApp credentials) failed silently until this was set to `false` in
+   `docker-compose.yml`. Already fixed there — don't remove it.
+2. **WhatsApp's verify-handshake query keys are literally dotted**
+   (`hub.mode`, `hub.verify_token`, `hub.challenge`), not
+   `hub_mode`/etc. The workflow now reads them as
+   `$json.query['hub.mode']` — using dot notation there would silently
+   read `undefined` and always fail verification.
+3. **pgvector's `ivfflat` index returns zero rows on small tables** when
+   `lists` doesn't match the actual row count — confirmed directly: a
+   4-row table returned nothing until the index was dropped. Since a
+   festival facility list will realistically stay in the tens-to-low-
+   hundreds of rows, `scripts/init.sql` no longer creates that index at
+   all; plain sequential vector distance search is exact and still
+   effectively instant at this scale.
+
+Beyond those three, node schemas still evolve between n8n versions — on
+import it may prompt you to upgrade a node. Accept the upgrade and
+spot-check it still matches what's described below.
 
 ## 1. Bring up the stack
 

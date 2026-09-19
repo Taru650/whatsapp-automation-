@@ -19,9 +19,6 @@ CREATE TABLE IF NOT EXISTS facilities (
     embedding   vector(768)          -- dimension for nomic-embed-text; adjust if you switch embedding models
 );
 
-CREATE INDEX IF NOT EXISTS facilities_embedding_idx
-    ON facilities USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-
 -- Free-text history / general-info chunks.
 CREATE TABLE IF NOT EXISTS history_chunks (
     id          SERIAL PRIMARY KEY,
@@ -30,5 +27,14 @@ CREATE TABLE IF NOT EXISTS history_chunks (
     embedding   vector(768)
 );
 
-CREATE INDEX IF NOT EXISTS history_chunks_embedding_idx
-    ON history_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+-- No ivfflat index here on purpose. ivfflat is an APPROXIMATE index tuned
+-- by a `lists` count that needs to roughly match your row count; get that
+-- wrong (e.g. the default-ish `lists = 100` against the few dozen/hundred
+-- rows this dataset will realistically have) and queries can silently
+-- return ZERO rows with no error — verified locally: on a 4-row table it
+-- returned nothing until the index was dropped. A facility/contact list
+-- for one festival will stay small enough (tens to low hundreds of rows)
+-- that plain sequential distance search (`ORDER BY embedding <=> ...`,
+-- no index) is exact and still effectively instant. Only add an ivfflat
+-- (or hnsw) index later if this table grows into the tens of thousands of
+-- rows, and size `lists` from the actual row count when you do.

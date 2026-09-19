@@ -41,13 +41,13 @@
           "conditions": [
             {
               "id": "c1",
-              "leftValue": "={{ $json.query.hub_mode }}",
+              "leftValue": "={{ $json.query['hub.mode'] }}",
               "rightValue": "subscribe",
               "operator": { "type": "string", "operation": "equals" }
             },
             {
               "id": "c2",
-              "leftValue": "={{ $json.query.hub_verify_token }}",
+              "leftValue": "={{ $json.query['hub.verify_token'] }}",
               "rightValue": "={{ $env.WHATSAPP_VERIFY_TOKEN }}",
               "operator": { "type": "string", "operation": "equals" }
             }
@@ -64,7 +64,7 @@
       "position": [440, -60],
       "parameters": {
         "respondWith": "text",
-        "responseBody": "={{ $json.query.hub_challenge }}"
+        "responseBody": "={{ $json.query['hub.challenge'] }}"
       }
     },
     {

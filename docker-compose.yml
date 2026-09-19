@@ -58,6 +58,12 @@ services:
       N8N_BASIC_AUTH_ACTIVE: "true"
       N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:?set N8N_BASIC_AUTH_USER in .env}
       N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD:?set N8N_BASIC_AUTH_PASSWORD in .env}
+      # n8n blocks $env.* access from node expressions by default (security
+      # gate). This workflow deliberately reads config (tokens, model names,
+      # the control-room fallback number) via $env instead of hardcoding it,
+      # so this must stay enabled. Verified against a live n8n instance —
+      # without this, every node using $env fails silently.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       # Exposed as $env.* inside the imported workflow's expressions.
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-llama3.1:8b}
