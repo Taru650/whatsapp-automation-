@@ -169,7 +169,63 @@
       "typeVersion": 2,
       "position": [660, 260],
       "parameters": {
-        "jsCode": "const text = ($json.messageText || '').toLowerCase();\nconst rules = [\n  { category: 'police', keywords: ['police', 'thana', 'chowki'] },\n  { category: 'medical', keywords: ['medical', 'hospital', 'doctor', 'ambulance'] },\n  { category: 'veterinary', keywords: ['veterinary', 'animal camp', 'cattle', ' vet'] },\n  { category: 'control_room', keywords: ['control room', 'helpline'] },\n  { category: 'law_order', keywords: ['magistrate', 'law and order', 'law & order'] }\n];\n\nlet category = null;\nfor (const rule of rules) {\n  if (rule.keywords.some((k) => text.includes(k))) {\n    category = rule.category;\n    break;\n  }\n}\n\nreturn [{ json: { ...$json, category } }];"
+        "jsCode": "const text = ($json.messageText || '').toLowerCase();\n// 'schedule' is checked first and is NOT a facilities.csv category - it\n// routes to the separate program_schedule direct-lookup path (see the\n// 'Is Schedule Intent?' node), not the facilities table.\nconst rules = [\n  { category: 'schedule', keywords: ['program today', 'schedule', 'performance', 'performer', 'artist', 'star performer', 'kaun perform', 'aaj kaun', 'special attraction'] },\n  { category: 'police', keywords: ['police', 'thana', 'chowki'] },\n  { category: 'medical', keywords: ['medical', 'hospital', 'doctor', 'ambulance'] },\n  { category: 'veterinary', keywords: ['veterinary', 'animal camp', 'cattle', ' vet'] },\n  { category: 'control_room', keywords: ['control room', 'helpline'] },\n  { category: 'law_order', keywords: ['magistrate', 'law and order', 'law & order'] },\n  { category: 'parking', keywords: ['parking', 'park vehicle', 'car park', 'vehicle stand'] },\n  { category: 'accommodation', keywords: ['accommodation', 'hotel', 'dharamshala', 'stay', 'room booking', 'tent booking'] }\n];\n\nlet category = null;\nfor (const rule of rules) {\n  if (rule.keywords.some((k) => text.includes(k))) {\n    category = rule.category;\n    break;\n  }\n}\n\nreturn [{ json: { ...$json, category } }];"
+      }
+    },
+    {
+      "id": "note-schedule",
+      "name": "Note - Schedule Path",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [880, -140],
+      "parameters": {
+        "width": 480,
+        "height": 220,
+        "content": "## Why the schedule path bypasses RAG entirely\n\"Who's performing today\" needs an exact match against today's date. Semantic search can't tell today's lineup from last week's - both read as similarly 'about the program'. So this checks category === 'schedule' first and runs a direct `WHERE date = CURRENT_DATE` query against program_schedule, never touching the LLM or the facilities/history vector search."
+      }
+    },
+    {
+      "id": "n23",
+      "name": "Is Schedule Intent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 340],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.category }}",
+              "rightValue": "schedule",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "n24",
+      "name": "Schedule Lookup",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1100, 420],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT time_slot, program_name, performer_name, is_special_attraction, venue FROM program_schedule WHERE date = CURRENT_DATE ORDER BY time_slot;",
+        "options": {}
+      }
+    },
+    {
+      "id": "n25",
+      "name": "Format Schedule Answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 420],
+      "parameters": {
+        "jsCode": "const rows = $input.all().map((i) => i.json);\nlet replyText;\n\nif (!rows.length) {\n  replyText = \"No program schedule has been published for today yet. Check back closer to the date, or ask the Mela Control Room.\";\n} else {\n  replyText = rows\n    .map((r) => {\n      const star = r.is_special_attraction ? ' \\u2b50 SPECIAL ATTRACTION' : '';\n      const who = r.performer_name ? ` - ${r.performer_name}` : '';\n      const where = r.venue ? ` (${r.venue})` : '';\n      return `${r.time_slot}: ${r.program_name}${who}${where}${star}`;\n    })\n    .join('\\n');\n}\n\nreturn [{ json: { to: $('Extract Message').first().json.from, replyText } }];"
       }
     },
     {
@@ -202,7 +258,7 @@
       "position": [1100, 160],
       "parameters": {
         "operation": "executeQuery",
-        "query": "={{ \"SELECT name, phone, location, hours FROM facilities WHERE category = '\" + $json.category + \"' ORDER BY name;\" }}",
+        "query": "={{ \"SELECT name, contact_person, phone, location, hours, shift FROM facilities WHERE category = '\" + $json.category + \"' ORDER BY name;\" }}",
         "options": {}
       }
     },
@@ -213,7 +269,7 @@
       "typeVersion": 2,
       "position": [1320, 160],
       "parameters": {
-        "jsCode": "const rows = $input.all().map((i) => i.json);\nconst controlRoom = $env.DISTRICT_CONTROL_ROOM_NUMBER;\nlet replyText;\n\nif (!rows.length) {\n  replyText = `Sorry, I don't have that listed yet. Please contact the District Control Room: ${controlRoom}`;\n} else {\n  replyText = rows\n    .map((r) => `${r.name}\\nPhone: ${r.phone}\\nLocation: ${r.location}\\nHours: ${r.hours}`)\n    .join('\\n\\n');\n}\n\nreturn [{ json: { to: $('Extract Message').first().json.from, replyText } }];"
+        "jsCode": "const rows = $input.all().map((i) => i.json);\nconst controlRoom = $env.DISTRICT_CONTROL_ROOM_NUMBER;\nlet replyText;\n\nif (!rows.length) {\n  replyText = `Sorry, I don't have that listed yet. Please contact the District Control Room: ${controlRoom}`;\n} else {\n  replyText = rows\n    .map((r) => {\n      const person = r.contact_person ? `\\nContact: ${r.contact_person}` : '';\n      const shift = r.shift ? ` (${r.shift} shift)` : '';\n      return `${r.name}${shift}${person}\\nPhone: ${r.phone}\\nLocation: ${r.location}\\nHours: ${r.hours}`;\n    })\n    .join('\\n\\n');\n}\n\nreturn [{ json: { to: $('Extract Message').first().json.from, replyText } }];"
       }
     },
     {
@@ -261,7 +317,7 @@
       "position": [1540, 340],
       "parameters": {
         "operation": "executeQuery",
-        "query": "={{ \"SELECT category, name AS title, phone, location, hours, notes AS content, (embedding <=> '\" + $json.embeddingLiteral + \"'::vector) AS distance, 'facility' AS kind FROM facilities UNION ALL SELECT NULL AS category, source AS title, NULL AS phone, NULL AS location, NULL AS hours, content, (embedding <=> '\" + $json.embeddingLiteral + \"'::vector) AS distance, 'history' AS kind FROM history_chunks ORDER BY distance ASC LIMIT 5;\" }}",
+        "query": "={{ \"SELECT category, name AS title, contact_person, phone, location, hours, shift, notes AS content, (embedding <=> '\" + $json.embeddingLiteral + \"'::vector) AS distance, 'facility' AS kind FROM facilities UNION ALL SELECT NULL AS category, source AS title, NULL AS contact_person, NULL AS phone, NULL AS location, NULL AS hours, NULL AS shift, content, (embedding <=> '\" + $json.embeddingLiteral + \"'::vector) AS distance, 'history' AS kind FROM history_chunks ORDER BY distance ASC LIMIT 5;\" }}",
         "options": {}
       }
     },
@@ -272,7 +328,7 @@
       "typeVersion": 2,
       "position": [1760, 340],
       "parameters": {
-        "jsCode": "const results = $input.all().map((i) => i.json);\nconst question = $('Classify Category').first().json.messageText;\nconst controlRoom = $env.DISTRICT_CONTROL_ROOM_NUMBER;\n// Cosine distance threshold - tune this after testing with real questions.\nconst CONFIDENCE_THRESHOLD = 0.35;\nconst bestDistance = results.length ? Math.min(...results.map((r) => r.distance)) : 1;\n\nif (!results.length || bestDistance > CONFIDENCE_THRESHOLD) {\n  return [{\n    json: {\n      lowConfidence: true,\n      to: $('Extract Message').first().json.from,\n      replyText: `I'm not certain about that. Please contact the District Control Room: ${controlRoom}`\n    }\n  }];\n}\n\nconst context = results\n  .map((r) => (r.kind === 'facility'\n    ? `[${r.category}] ${r.title} — Phone: ${r.phone}, Location: ${r.location}, Hours: ${r.hours}`\n    : `${r.title}: ${r.content}`))\n  .join('\\n');\n\nconst prompt = `You are a helpful assistant for Sonpur Mela visitors. Answer ONLY using the context below. If the answer isn't in the context, say you don't know and give the District Control Room number ${controlRoom}. Keep the answer short.\\n\\nContext:\\n${context}\\n\\nQuestion: ${question}\\n\\nAnswer:`;\n\nreturn [{ json: { lowConfidence: false, prompt, to: $('Extract Message').first().json.from } }];"
+        "jsCode": "const results = $input.all().map((i) => i.json);\nconst question = $('Classify Category').first().json.messageText;\nconst controlRoom = $env.DISTRICT_CONTROL_ROOM_NUMBER;\n// Cosine distance threshold - tune this after testing with real questions.\nconst CONFIDENCE_THRESHOLD = 0.35;\nconst bestDistance = results.length ? Math.min(...results.map((r) => r.distance)) : 1;\n\nif (!results.length || bestDistance > CONFIDENCE_THRESHOLD) {\n  return [{\n    json: {\n      lowConfidence: true,\n      to: $('Extract Message').first().json.from,\n      replyText: `I'm not certain about that. Please contact the District Control Room: ${controlRoom}`\n    }\n  }];\n}\n\nconst context = results\n  .map((r) => (r.kind === 'facility'\n    ? `[${r.category}] ${r.title}${r.shift ? ' (' + r.shift + ' shift)' : ''}${r.contact_person ? ', Contact: ' + r.contact_person : ''} — Phone: ${r.phone}, Location: ${r.location}, Hours: ${r.hours}`\n    : `${r.title}: ${r.content}`))\n  .join('\\n');\n\nconst prompt = `You are a helpful assistant for Sonpur Mela visitors. Answer ONLY using the context below. If the answer isn't in the context, say you don't know and give the District Control Room number ${controlRoom}. Keep the answer short.\\n\\nContext:\\n${context}\\n\\nQuestion: ${question}\\n\\nAnswer:`;\n\nreturn [{ json: { lowConfidence: false, prompt, to: $('Extract Message').first().json.from } }];"
       }
     },
     {
@@ -391,7 +447,15 @@
         [{ "node": "Ack Non-Text", "type": "main", "index": 0 }]
       ]
     },
-    "Classify Category": { "main": [[{ "node": "Has Direct Category?", "type": "main", "index": 0 }]] },
+    "Classify Category": { "main": [[{ "node": "Is Schedule Intent?", "type": "main", "index": 0 }]] },
+    "Is Schedule Intent?": {
+      "main": [
+        [{ "node": "Schedule Lookup", "type": "main", "index": 0 }],
+        [{ "node": "Has Direct Category?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Schedule Lookup": { "main": [[{ "node": "Format Schedule Answer", "type": "main", "index": 0 }]] },
+    "Format Schedule Answer": { "main": [[{ "node": "Send WhatsApp Reply", "type": "main", "index": 0 }]] },
     "Has Direct Category?": {
       "main": [
         [{ "node": "Direct Lookup", "type": "main", "index": 0 }],

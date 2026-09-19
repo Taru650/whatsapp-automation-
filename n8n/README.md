@@ -35,6 +35,16 @@ Beyond those three, node schemas still evolve between n8n versions — on
 import it may prompt you to upgrade a node. Accept the upgrade and
 spot-check it still matches what's described below.
 
+**Later addition (schema extension)**: `facilities` gained
+`contact_person` and `shift` columns, and a new `program_schedule` table
+was added for date-indexed daily program/performer lookups (parking,
+accommodation, and expanded control-room categories were added as
+`facilities` rows, not new tables). The new `Is Schedule Intent?` →
+`Schedule Lookup` → `Format Schedule Answer` branch and the updated
+`Direct Lookup`/`Vector Search` queries (now selecting `contact_person`,
+`shift`) were re-validated the same way as the original three bugs above
+— real Postgres, real schema, real queries, mocked LLM only.
+
 ## 1. Bring up the stack
 
 ```bash
@@ -74,8 +84,8 @@ credentials from `.env`.
 
 1. In n8n: **Workflows → Import from File** → select
    `n8n/workflows/sonpur-mela-bot.json`.
-2. Open the two **Postgres** nodes (`Direct Lookup`, `Vector Search`) and
-   assign a Postgres credential pointing at:
+2. Open the three **Postgres** nodes (`Direct Lookup`, `Vector Search`,
+   `Schedule Lookup`) and assign a Postgres credential pointing at:
    - Host: `postgres` (the Docker service name)
    - Port: `5432`
    - Database / User / Password: whatever you set in `.env`
@@ -87,8 +97,9 @@ credentials from `.env`.
 
 ## 4. Load the data
 
-Fill in `data/facilities.csv` and `data/history.md` with **verified**
-information (see the warnings in those files — don't ship placeholder rows
+Fill in `data/facilities.csv`, `data/history.md`, and
+`data/program_schedule.csv` with **verified** information (see the
+warnings in those files — don't ship `PLACEHOLDER`/`DUMMY-TEST-DATA` rows
 to the public). Then run the ingestion script from the host:
 
 ```bash
@@ -100,12 +111,20 @@ python scripts/ingest.py
 ```
 
 Re-run `ingest.py` any time the data changes — it fully replaces the
-`facilities` and `history_chunks` tables each run.
+`facilities`, `history_chunks`, and `program_schedule` tables each run.
+This is how you handle the "these numbers get updated time to time"
+requirement: edit the CSV/Markdown, re-run this one script, no code or
+workflow changes needed.
 
 ## 5. Test end-to-end
 
 Send a WhatsApp message to your business number:
 - `"police station number"` → should hit the direct-lookup path.
+- `"parking"` / `"hotel booking"` → same direct-lookup path, now covering
+  parking and accommodation categories.
+- `"what's the program today"` → should hit the new schedule path
+  (`Is Schedule Intent?` → `Schedule Lookup`), answering from
+  `program_schedule` for today's date specifically — not from RAG.
 - `"what is the history of sonpur mela"` → should hit the RAG path.
 - Something unrelated/nonsense → should return the district control room
   fallback rather than a made-up answer.
@@ -122,6 +141,13 @@ Send a WhatsApp message to your business number:
   lookups deterministically from the database, skipping the LLM
   (faster, and structurally can't hallucinate a phone number). Expand the
   keyword list in that Code node as you see real user phrasing.
+- **Why "today's program" is a separate branch, not RAG.** Semantic
+  search can't tell "today's lineup" from "last week's lineup" — both
+  embed as similarly-about-the-program text. `program_schedule` has no
+  embedding column at all; `Schedule Lookup` runs an exact
+  `WHERE date = CURRENT_DATE` query instead. If you need "what's on
+  tomorrow" or a specific date, extend `Classify Category` to extract a
+  date and pass it into that query — v1 only handles "today".
 - **Confidence threshold.** `Build RAG Prompt` skips the LLM call entirely
   and returns the control-room fallback number when the closest retrieved
   record is a poor match (`CONFIDENCE_THRESHOLD = 0.35` cosine distance).

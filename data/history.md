@@ -85,10 +85,53 @@ Source: [RailMitra — Sonpur Mela Complete Guide](https://www.railmitra.com/blo
 ## Facilities for visitors
 
 TODO: General visitor facilities (drinking water points, a lost-and-found
-desk if one exists, tent-city/accommodation arrangements, cloakrooms)
-were not found via web search in enough verified detail to publish here
-— these tend to be announced fresh each year rather than documented on a
-stable page. Pull this from the district administration's current-year
-Mela notification closer to the event. (Emergency/administrative
-contacts — police, medical, veterinary, control room — live separately in
-`data/facilities.csv`, not here.)
+desk if one exists, cloakrooms) were not found via web search in enough
+verified detail to publish here — these tend to be announced fresh each
+year rather than documented on a stable page. Pull this from the
+district administration's current-year Mela notification closer to the
+event. (Emergency/administrative contacts, accommodation, and parking —
+police, medical, veterinary, control room, hotels/camps, vehicle parking
+— live separately in `data/facilities.csv`, not here, since those are
+structured lookups rather than free-text answers.)
+
+## Daily program & special attractions
+
+Day-by-day cultural program schedules (morning/evening events, and which
+day's headline performer is the "special attraction") live in
+`data/program_schedule.csv`, not here — that data is date-indexed and
+needs an exact "what's happening today" lookup rather than a semantic
+text search, so it's handled by a separate direct-lookup path in the n8n
+workflow instead of this RAG-retrieved history text. As of when this was
+written (~2 months before the 2026 Mela), no official day-by-day lineup
+had been published yet — `program_schedule.csv` currently holds only
+placeholder rows for pipeline testing. Replace them once the district
+administration/Art & Culture department publishes the real schedule,
+typically closer to the event.
+
+## Prohibited / banned items
+
+**Not confirmed as Sonpur Mela's official list.** Web search found that
+`saran.nic.in`'s 2025 Mela page references a dedicated "Banned Lists"
+section, but the page itself is unreachable for direct fetch from this
+environment, so its actual contents couldn't be verified. Do not present
+the list below to the public as Sonpur-specific — it's included only as
+context for what comparable large Indian mela-scale/fair events commonly
+restrict, cited to those other events:
+
+- Weapons/arms, except for on-duty security personnel (common at
+  comparable fairs such as the Surajkund Craft Fair).
+- Unmanned aerial vehicles / drones flown by the public (banned at
+  Surajkund Craft Fair and widely restricted at other large Indian public
+  gatherings for security reasons).
+- Large public gatherings/assemblies beyond a stated limit, when a
+  prohibitory order (Section 163 BNS / erstwhile Section 144 CrPC) is in
+  force for the event — common practice at Indian mela-scale events,
+  not confirmed specifically for Sonpur.
+
+Source: [Tribune India — Surajkund Craft Fair security measures, drones banned](https://www.tribuneindia.com/news/haryana/surajkund-craft-fair-to-be-organised-under-stringent-security-measures-drones-banned/) (an analogous fair, not Sonpur itself)
+
+**Action needed before this goes live**: get the actual Sonpur Mela
+banned-items list from `saran.nic.in`'s Banned Lists section or the
+district administration directly, and replace this section entirely —
+telling a visitor something is fine to carry when it's actually banned
+(or vice versa) is a real problem, not a stylistic one.

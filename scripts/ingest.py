@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-Embed data/facilities.csv and data/history.md into the pgvector store.
+Load data/facilities.csv, data/history.md, and data/program_schedule.csv
+into Postgres. facilities and history get embedded into pgvector for
+semantic retrieval; program_schedule is loaded as plain rows (no
+embedding) since it's looked up by exact date match, not similarity.
 
 Run this once after filling in real data, and again any time the data
-changes (e.g. an updated phone number, a corrected history section) —
-there is no LLM retraining involved, just re-running this script.
+changes (e.g. an updated phone number, a corrected history section, a
+newly-published day's program) — there is no LLM retraining involved,
+just re-running this script.
 
 Usage:
     python scripts/ingest.py
@@ -34,6 +38,7 @@ POSTGRES_DSN = {
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 FACILITIES_CSV = os.path.join(DATA_DIR, "facilities.csv")
 HISTORY_MD = os.path.join(DATA_DIR, "history.md")
+PROGRAM_SCHEDULE_CSV = os.path.join(DATA_DIR, "program_schedule.csv")
 
 PLACEHOLDER_MARKERS = ("PLACEHOLDER", "TODO")
 
@@ -52,9 +57,9 @@ def to_pgvector_literal(vec: list[float]) -> str:
     return "[" + ",".join(repr(v) for v in vec) + "]"
 
 
-def load_facilities():
+def load_csv(path):
     rows = []
-    with open(FACILITIES_CSV, newline="", encoding="utf-8") as f:
+    with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             rows.append(row)
     return rows
@@ -94,29 +99,34 @@ def main():
 
     print("Ingesting facilities...")
     cur.execute("DELETE FROM facilities;")
-    for row in load_facilities():
+    for row in load_csv(FACILITIES_CSV):
         if has_placeholder(row.get("name", ""), row.get("phone", "")):
             skipped += 1
             continue
         text = (
             f"{row['category']} contact: {row['name']}. "
+            f"Contact person: {row.get('contact_person', '')}. "
             f"Phone: {row.get('phone', '')}. Location: {row.get('location', '')}. "
-            f"Hours: {row.get('hours', '')}. {row.get('notes', '')}"
+            f"Hours: {row.get('hours', '')}. Shift: {row.get('shift', '')}. "
+            f"{row.get('notes', '')}"
         )
         vec = embed(text)
         cur.execute(
             """
-            INSERT INTO facilities (category, name, phone, location, lat, lon, hours, notes, embedding)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO facilities
+                (category, name, contact_person, phone, location, lat, lon, hours, shift, notes, embedding)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 row["category"],
                 row["name"],
+                row.get("contact_person"),
                 row.get("phone"),
                 row.get("location"),
                 float(row["lat"]) if row.get("lat") else None,
                 float(row["lon"]) if row.get("lon") else None,
                 row.get("hours"),
+                row.get("shift"),
                 row.get("notes"),
                 to_pgvector_literal(vec),
             ),
@@ -134,6 +144,32 @@ def main():
         cur.execute(
             "INSERT INTO history_chunks (source, content, embedding) VALUES (%s, %s, %s)",
             (heading, body, to_pgvector_literal(vec)),
+        )
+
+    print("Ingesting program schedule...")
+    cur.execute("DELETE FROM program_schedule;")
+    for row in load_csv(PROGRAM_SCHEDULE_CSV):
+        if has_placeholder(row.get("program_name", ""), row.get("performer_name", "")):
+            skipped += 1
+            continue
+        # No embedding here on purpose - see the comment on the
+        # program_schedule table in scripts/init.sql. This is looked up by
+        # exact date match in n8n, not semantic search.
+        cur.execute(
+            """
+            INSERT INTO program_schedule
+                (date, time_slot, program_name, performer_name, is_special_attraction, venue, notes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                row["date"],
+                row.get("time_slot"),
+                row["program_name"],
+                row.get("performer_name"),
+                str(row.get("is_special_attraction", "")).strip().lower() == "true",
+                row.get("venue"),
+                row.get("notes"),
+            ),
         )
 
     cur.close()
