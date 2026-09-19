@@ -71,6 +71,25 @@ docker compose up -d
 Then follow `n8n/README.md` for WhatsApp Cloud API registration, importing
 the workflow, and loading real facility/history data.
 
+## Data provenance note: the 2025 Mela order
+
+Several rows in `data/facilities.csv` (Sonpur SDPO, District Magistrate/
+Sonpur SDO, Electricity Supply Executive Engineer, Civil Surgeon Saran,
+District Animal Husbandry Officer) are sourced from a real official
+document: the joint District Magistrate + SP administrative order for
+the 2025 Sonpur Mela (Memo No. 11178/C, dated 08.11.2025, 55 pages).
+That document contains far more than what's loaded here — full staffing
+lists for 13 temporary police posts, ghat/temple patrol rosters, medical
+camp staff, etc. — but almost all of it is explicitly scoped to the
+Mela's opening week (09–13 Nov 2025) or a specific named individual on
+duty that week, not durable for the rest of the ~32-day Mela, let alone
+2026. Only the standing office-holder directory (District Magistrate,
+SP, Civil Surgeon, department Executive Engineers — pages 50–53 of that
+memo) was pulled in, since those are institutional contacts rather than
+a week-specific duty roster. Every row from this source says so in its
+`notes` and is dated 2025 — reconfirm all of them before the 2026 Mela;
+office-holders in these positions change with routine staff transfers.
+
 ## Before this goes live
 
 - **Replace every `PLACEHOLDER`/`DUMMY-TEST-DATA`/`TODO`** in
