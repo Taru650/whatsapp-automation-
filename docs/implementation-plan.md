@@ -1,11 +1,12 @@
 # Saran Citizen WhatsApp Bot: Detailed Implementation Plan
 ### Phase 1: Sonpur Mela + District/Block Officer Directory
 
-*Version 1.0 · 23 Sep 2026 · Branch `claude/whatsapp-n8n-llm-chatbot-o9gtyo`*
+*Version 1.1 · 23 Sep 2026 (adds 📍 Near me + on-site coordinate capture) · Branch `claude/whatsapp-n8n-llm-chatbot-o9gtyo`*
 
 > **Summary.**
 > - **What:** a WhatsApp bot built on n8n where a citizen types "Hi" and chooses **Sonpur Mela** information or the **Officer Directory**.
 > - **Data:** it answers from Google Sheets that staff maintain, never from LLM guesses.
+> - **Near me:** a citizen can share their location to get the nearest police station, health centre or vet camp, with walking directions.
 > - **Growth:** new citizen services (Scheme Eligibility is next) plug in by adding a service row and a workflow, without rebuilding the bot.
 > - **Hosting:** an on-prem office machine behind a Cloudflare Tunnel.
 > - **Schedule:** go-live is targeted around **10 Nov 2026**, two weeks before the Mela opens, after three test-gated milestones.
@@ -168,11 +169,13 @@ Each has its own DB and env file. Promotion from staging to prod imports the sam
 
 ### 3.2 Service contract
 ```
-INPUT  { wa_hash, lang: "hi"|"en", state, context, now_ist,
+INPUT  { wa_hash, lang: "hi"|"en", state, context, now_ist, is_admin,
          input: { kind, id, text, lat, lon, intent?: {subtype, slots} } }
 OUTPUT { messages: [ {type:"text", body} |
                      {type:"buttons", body, buttons:[{id,title}] (≤3)} |
-                     {type:"list", body, button, sections:[{title, rows:[{id,title,description}]}] (≤10 rows)} ],
+                     {type:"list", body, button, sections:[{title, rows:[{id,title,description}]}] (≤10 rows)} |
+                     {type:"location", lat, lon, name, address} |          // map pin, opens in Maps
+                     {type:"location_request", body} ],                  // "Send location" button
          next_state, context, done, log: { subtype, resolved } }
 ```
 Rules:
@@ -207,7 +210,8 @@ Rules:
 - **Session timeout:** 30 min idle. The next message starts at the menu, but self-describing IDs still work.
 - **Menu shortcuts:** "0" or "menu" works anywhere. Each result ends with the feedback + menu buttons.
 - **Unsupported message types** (voice, image, video, sticker, document): the bot replies with a template and shows the menu.
-- **Location messages:** routed to the active service if it declares `accepts_location`, otherwise to the menu.
+- **Location messages:** routed to the active service if it declares `accepts_location`. Otherwise they go to the service with a pending location request, and if there is none, to `svc_mela`'s "nearest" handler during the Mela window (§6.1a) or to the menu outside it.
+- **Admins:** `core.admins` (hashed numbers, seeded from `ADMIN_WA_NUMBERS`) sets `is_admin` in the service input. Admin-only IDs (`*:adm:*`) are rejected for everyone else.
 
 ---
 
@@ -232,6 +236,11 @@ Rules:
   - Seeded 06:00–14:00, 14:00–22:00, and 22:00–06:00; this pattern is identical in the Control Room and Thana tabs.
   - `current_shift(now_ist)` handles Shift-3 crossing midnight.
 - **`places`** `(id, category, name_en, name_hi NULL, lat NULL, lon NULL, sort)`.
+  - `lat`/`lon` come from the sheet.
+- **`place_coords`** `(place_id PK, lat, lon, captured_by_hash, captured_at)`: coordinates captured on-site by admins (§6.1b).
+  - **The sync never touches this table.**
+  - Effective location = `COALESCE(sheet lat/lon, captured lat/lon)`, so a value typed into the sheet overrides a capture.
+  - The view `v_places_geo` exposes it.
   - `category` is one of: `health_centre`, `thana`, `vet_camp`, `parking`, `ghat`, `accommodation`, `other`.
 - **`duty`** `(place_id, shift_no NULL, person_name, phones text[], role NULL)`.
   - `shift_no NULL` means all-day. Vet camps have no shifts. Merged cells in the source mean the same person on every shift.
@@ -244,6 +253,9 @@ Rules:
 - **`guidelines`** `(kind do|dont, text_hi, text_en, sort)`. **Not in the sample.** The menu row is hidden until rows exist.
 - **`qa_context`** `(id=1, content)`: `history.md` + guidelines.
 - **Functions:** a `replace_<table>(jsonb)` function per table, `current_shift()`, and `on_duty(category, now_ist)`.
+- **`nearest(category, lat, lon, n=3)`:** haversine distance over `v_places_geo`, limited to `active AND verified AND coordinates present`.
+  - Returns `place, distance_m, on-duty person, phone`.
+  - Plain SQL is enough for about 50 sites, so no PostGIS is needed.
 
 ### `svc_directory` schema (`20_svc_directory.sql`), shaped by the real sample
 - **`officers`** `(id, level, unit_en, unit_hi NULL, designation_en, designation_hi NULL, person_name, phone NULL, email NULL, keywords text[], sort, last_verified)`.
@@ -270,7 +282,7 @@ Rules:
 | D7 | **Suspected copy-paste errors** | Director DRDA and Incharge Legal Section share `9031071905`. Nagar PS and Nagra PS share an email. "Bahadur Prasad Yadav" is on duty at two thanas with different numbers | A sync **warning** (not a reject) lists duplicate phones/emails across different people; the data owner confirms |
 | D8 | **The Control Room tab lists internal duty officers but no public helpline number** | The tab has no "call this number" line | Citizens need one number. **Ask the district for the public control room number**; it goes in `control_room_public`. The desk roster is shown underneath |
 | D9 | **Accommodation and do's & don'ts are not in the sample**; **Ghats are** (6) | Sheet list | Mela menu rows are **data-driven**: a category with 0 rows is hidden automatically. Ghats become a menu row |
-| D10 | **No lat/lon** for parking, ghats, or anything else | Blank columns | No map links or "nearest" feature at launch. Once coordinates are filled in, map links appear automatically |
+| D10 | **No lat/lon** for any site | Blank columns | The **"📍 Near me" feature (§6.1a) depends entirely on coordinates.** The temporary sites only exist once they are set up, so coordinates are **captured on-site by staff through the bot's admin tool (§6.1b)** in the set-up week. Until then the feature switches itself off per category |
 | D11 | **Schedule is 2025** (22 Nov–7 Dec 2025, with gaps on 4 and 6 Dec). No time or venue. Artist names are comma-joined | Mela Schedule tab | Good staging seed. The sync **warns** if no event date falls in the next 30 days. "Today" with no row → "No programme listed today" + the next listed date |
 | D12 | **Police thanas aren't linked to blocks** (39 district thanas vs 20 blocks). Sub-division rows all read "Subdivisional Officer" and only the email reveals Chapra/Marhaura/Sonpur | Directory sheet | A "block → department" flow doesn't fit. The directory is navigated **by office level first** (§6.2). Converter sets `unit_en` for sub-divisions from the email |
 | D13 | **All data is English only** | Both files | The bot's own text is in hi/en. Names and places stay in English unless staff fill the optional `*_hi` columns. We **won't machine-transliterate personal names**, because wrong Hindi names on an official channel are worse than English ones |
@@ -298,7 +310,7 @@ Rules:
 | Tab | Columns (header row, exactly) | One row = |
 |---|---|---|
 | `README` | the rules above + a contact for the data owner | n/a |
-| `settings` | key, value → `mela_start`, `mela_end`, `shift1_start` 06:00, `shift2_start` 14:00, `shift3_start` 22:00, `public_helpline_1`, `public_helpline_2` | one setting |
+| `settings` | key, value → `mela_start`, `mela_end`, `shift1_start` 06:00, `shift2_start` 14:00, `shift3_start` 22:00, `public_helpline_1`, `public_helpline_2`, `mela_center_lat`, `mela_center_lon`, `mela_radius_km` (default 5) | one setting |
 | `places` | id, category▼, name_en, name_hi, location_en, location_hi, lat, lon, hours, **s1_name, s1_phone, s2_name, s2_phone, s3_name, s3_phone, allday_name, allday_phone, phone_2**, notes, active, verified, updated_by | one thana / health centre / vet camp / parking / ghat / accommodation / help desk. Shift columns are blank where not applicable (parking, ghat) |
 | `control_room` | desk▼ (Magistrate, Police, Sanitation & Water, Electricity, Health, other), s1_name, s1_designation, s1_phone, s2_…, s3_…, allday_name, allday_designation, allday_phone, phone_2, active, verified, updated_by | one desk (the sample's grid maps 1:1) |
 | `events` | id, date, time, programme_en, programme_hi, artists, department, venue, is_highlight, active, verified, updated_by | one programme item (several per day allowed) |
@@ -340,8 +352,8 @@ control: Sanitation & Water | … | allday_name: Shri Nikhil Kumar, AE PHED Chha
 ### 6.1 `svc_mela` (id_prefix `mela`). The menu is built from the data (empty categories are hidden)
 | Row id | Title (en / hi) | Answer |
 |---|---|---|
-| `mela:today` | Today's programme / आज का कार्यक्रम | Today's `events`. If none: "No programme listed today; next: &lt;date&gt; – &lt;programme&gt;" |
-| `mela:schedule` | Full schedule / पूरा कार्यक्रम | All upcoming dates in one text card (14 rows ≈ 900 chars) |
+| `mela:today` | Today's programme / आज का कार्यक्रम | Today's `events`. If none: "No programme listed today; next: &lt;date&gt; – &lt;programme&gt;". Ends with a `[📅 Full schedule]` button (`mela:schedule`), which frees a list row for 📍 Near me and keeps the menu within the 10-row limit |
+| `mela:near` | 📍 Near me / मेरे पास | Asks which service (thana / health / vet / parking / ghat / control), then sends a "Send location" request (§6.1a). Shown only once at least one category has coordinates |
 | `mela:control` | Control room / कंट्रोल रूम | Public helpline number(s) first, then **on-duty desk officers for the current shift** (Magistrate, Police, Sanitation & Water, Electricity, Health) |
 | `mela:cat:thana` | Police stations / पुलिस थाना | All 14 temporary thanas with the **current-shift in-charge + phone** in one card (≈1.2k chars), with a shift label and time |
 | `mela:cat:health_centre` | Health centres / स्वास्थ्य केंद्र | 5 centres + current-shift staff |
@@ -351,9 +363,53 @@ control: Sanitation & Water | … | allday_name: Shri Nikhil Kumar, AE PHED Chha
 | `mela:rules` | Do's & don'ts / क्या करें, क्या न करें | Hidden until `guidelines` has rows |
 | `mela:ask` | Ask a question / सवाल पूछें | Next free text → LLM Q&A over `qa_context` |
 
-- **"Full shift roster" button:** thana, health, and control cards end with `[🔁 All shifts] [🏠 Menu]`. `mela:roster:<category>` sends all 3 shifts.
+- **Card buttons:** thana, health, and vet cards end with `[📍 Nearest] [🔁 All shifts] [🏠 Menu]` (the 3-button maximum). `mela:roster:<category>` sends all 3 shifts; `mela:near:<category>` jumps straight to the location request.
 - **Long messages:** any card over 4096 chars is split at place boundaries.
 - **Free-text shortcuts:** the classifier maps "thana", "police", "doctor", "hospital", "parking", "ghat", "aaj ka program" and similar straight to these ids. A place name typed as text (e.g. "Kali Ghat") matches `places` by trigram and returns that one place's card.
+
+### 6.1a "📍 Near me": nearest police / health centre / vet camp, with walking directions
+**Triggers**
+- Free text such as "police near me", "nearest hospital", "पास में थाना कहाँ है", or "dispensary kidhar hai". The classifier returns `mela.near{category}`.
+- The `📍 Near me` menu row.
+- A card's `[📍 Nearest]` button.
+- A citizen sharing a location with no pending question: the reply covers the nearest **thana + health centre + control room** together.
+
+**Flow**
+1. **Ask for location:** the bot sends `location_request` ("Tap *Send location* to find the nearest police station"). Session state becomes `mela.await_location{category}`, valid for 10 min. [Likely] The WhatsApp Cloud API supports this interactive type; if it is unavailable on the pinned Graph version, the bot falls back to the text instruction "📎 → Location → Send current location".
+2. **Receive location:** the citizen's `location` message arrives, and the bot calls `nearest(category, lat, lon, 3)`.
+3. **Reply:**
+   - One text card with the 3 nearest sites. Each shows name, **≈ distance** (straight-line, labelled "approx."), the **in-charge on duty now** with 📞, and a **🧭 Walking directions** link: `https://www.google.com/maps/dir/?api=1&destination=<lat>,<lon>&travelmode=walking`.
+   - The link deliberately has **no origin**, so Google Maps uses the phone's live GPS and keeps updating as the person walks. It also keeps the citizen's own coordinates out of any URL.
+   - A native **`location` pin** for the nearest site; one tap opens it in the phone's Maps app.
+   - Buttons: `[🔁 Next 3] [📋 All <category>] [🏠 Menu]`.
+
+**Edge cases**
+| Situation | Behaviour |
+|---|---|
+| Citizen is more than `mela_radius_km` from the Mela centre | "You seem to be outside the Mela area." The bot shows the full category list plus a directions link to the Mela control room |
+| No site in the category has coordinates yet | "Location service for &lt;category&gt; starts soon." The bot shows the full list card (no dead end) |
+| Citizen can't or won't share location (feature phone, GPS off, refuses) | "Or type a nearby landmark (e.g. Kali Ghat, Meena Bazar)." A trigram match on `places` uses that place's coordinates as the origin |
+| Location shared while the session expected something else | Handled as "nearest of all key categories" |
+| Two sites at about the same distance | Both are shown; the list is sorted by distance, then `sort` |
+
+**Privacy:**
+- The citizen's latitude/longitude are **used in memory only and never stored**.
+- `message_log` records `kind=location`, the category, and a distance bucket (<250 m, <500 m, <1 km, <2 km, more) for analytics.
+- The privacy notice mentions location use.
+
+### 6.1b Admin coordinate capture (on-site, in the set-up week)
+Typing coordinates by hand into a sheet is error-prone (swapped lat/lon, missing decimals), and the temporary sites only exist once they are built. Staff therefore **pin each site by standing at it and sharing their WhatsApp location with the bot.**
+
+1. An admin number sends `pin` (or taps `mela:adm:pin`), picks a category, then the site. The list shows sites **without coordinates first**, marked ✅/❌, and is paginated.
+2. The bot sends `location_request`; the admin shares the current location from the site's entrance.
+3. The bot replies with the captured point as a map pin, plus `[✅ Save] [↻ Retry]`.
+4. On Save:
+   - the point is upserted into `place_coords`
+   - it is written back to the sheet's `lat`/`lon` cells as best effort, which needs the service account to have Editor access on `places`
+   - the event is logged with the admin's hash
+5. `pin status` shows counts per category (e.g. "Thana 11/14 pinned"). The daily digest lists unpinned sites until they are all done.
+
+**Effort on the ground:** about 50 sites. One or two staff on a bike can do it in about a day [Guessing], once the camps and thanas are physically up, typically in the week before the Mela opens.
 
 ### 6.2 `svc_directory` (id_prefix `dir`). Navigation by office level, matching the data (D12)
 **Level menu** (list):
@@ -392,6 +448,7 @@ control: Sanitation & Water | … | allday_name: Shri Nikhil Kumar, AE PHED Chha
   - **Minimisation:** analytics use the hash only; the raw number is encrypted at rest.
   - **Retention:** 180 days, enforced by the nightly purge.
   - **LLM:** receives message text only.
+  - **Location:** citizen coordinates are processed in memory and never stored or logged; only distance buckets are logged. Admin captures store the site's coordinates, not the person's.
 - **Ethics:** the bot never asks for Aadhaar or other identity numbers.
 
 ## 8. Operations
@@ -410,7 +467,7 @@ control: Sanitation & Water | … | allday_name: Shri Nikhil Kumar, AE PHED Chha
 ## 9. Testing strategy
 | Layer | Tool | What it covers |
 |---|---|---|
-| SQL | `tests/sql/*.sql` via `psql` + `pgTAP`-style asserts | `begin_turn` (dedupe, rate limit), `current_shift`/`on_duty` shift boundaries, `replace_*` atomicity, directory fuzzy block match |
+| SQL | `tests/sql/*.sql` via `psql` + `pgTAP`-style asserts | `begin_turn` (dedupe, rate limit), `current_shift`/`on_duty` shift boundaries, `nearest()` (known points with hand-computed distances, inactive/unverified/no-coordinate sites excluded, sheet value overrides capture), `replace_*` atomicity (sync leaves `place_coords` intact), directory fuzzy block match |
 | Templates | `tests/check_templates.py` | WhatsApp field limits in hi and en, and no missing translations |
 | Flow | `tests/run_flow_tests.py` + `tests/payloads/*.json` + `tests/services/<key>/*.yaml` | Real-shaped Meta payloads are sent to the staging webhook (mocks on). Asserts on captured outbound payloads, `message_log`, and `sessions` |
 | Contract | same runner via `99-test-harness` | Output schema of every service for its standard inputs |
@@ -445,7 +502,10 @@ Effort is in developer-days for 1 developer, plus a part-time data/ops owner on 
 - [x] Publishing duty-staff mobiles approved (D15): file a copy of the order
 - [ ] Unicode spelling of "Nakhas" (the cell uses Kruti Dev encoding, D2); corrected numbers for D3/D4; confirm the D7 duplicates
 - [ ] **Block-level officer lists for all 20 blocks** (BDO/CO plus the other posts: MOIC, BEO, CDPO, BAO, MO Supply, JE, and so on), in the template format or any Excel
-- [ ] Optional: accommodation list, do's & don'ts, lat/lon for parking and ghats, Hindi names
+- [ ] **Mela centre point and radius** (e.g. the Harihar Nath temple gate, 5 km) for the "outside the Mela area" check
+- [ ] **Field staff (1–2 people, about 1 day) in the Mela set-up week** to pin every thana, health centre, vet camp, parking area and ghat with the admin tool (§6.1b); their numbers are added to `ADMIN_WA_NUMBERS`
+- [ ] Service account given **Editor** access to the Mela sheet (for coordinate write-back)
+- [ ] Optional: accommodation list, do's & don'ts, Hindi names
 - [ ] The 2026 programme schedule, when announced (the sample is 2025)
 
 ### M0: Core platform: weeks 1–2, ~10 dev-days
@@ -468,7 +528,7 @@ Effort is in developer-days for 1 developer, plus a part-time data/ops owner on 
 - A fresh-instance import works with credentials as the only manual step.
 - A real round-trip works on the Meta test number.
 
-### M1: Sonpur Mela: weeks 3–4, ~8 dev-days
+### M1: Sonpur Mela: weeks 3–4.5, ~12.5 dev-days
 | Task | Days |
 |---|---|
 | `10_svc_mela.sql`: shifts, places, duty, control room, events, `current_shift`/`on_duty`, `replace_*` | 1 |
@@ -476,7 +536,9 @@ Effort is in developer-days for 1 developer, plus a part-time data/ops owner on 
 | `sync_mela` with validation (D2–D7, D11) and alerts/digest | 1.5 |
 | `svc_mela` workflow: data-driven menu, today/schedule, control room on-duty, category cards with current shift, all-shifts roster, place-name lookup, ask (Q&A mode) | 3 |
 | Fixtures (built from the real 2025 sample, re-dated) + SQL shift tests + 30-line LLM set | 1.5 |
-| UAT on staging with the data owner | 0.5 |
+| **📍 Near me (§6.1a):** `nearest()` SQL, location request/receive, radius check, landmark fallback, directions link + map pin, card buttons; core send support for `location` / `location_request` messages | 2 |
+| **Admin coordinate capture (§6.1b):** `core.admins`, `mela:adm:*` flow, `place_coords`, sheet write-back, `pin status`, digest line | 1 |
+| UAT on staging with the data owner (including a walk test at 3 real points with the admin tool and near-me) | 0.5 |
 
 **Gate M1:**
 - All fixtures pass in hi and en.
@@ -484,7 +546,10 @@ Effort is in developer-days for 1 developer, plus a part-time data/ops owner on 
 - The converter reproduces every source row: 5 health centres × 3 shifts, 14 thanas × 3, 11 vet camps, 18 parking, 6 ghats, 14 events, and 5 control desks.
 - The converter report flags D2, D3, D4 and D7 items, and none of them reaches citizens.
 - A broken sheet leaves the data unchanged and raises one alert.
-- LLM routing ≥90%, with 0 invented numbers.
+- LLM routing ≥90%, with 0 invented numbers; the 30-line set includes 8 "near me" phrasings in Hindi, Hinglish and English.
+- Near me: for 10 test origins, the returned top-1 matches a hand-checked nearest site. Directions links open walking navigation to the right point on Android and iPhone. Origins outside the radius, no-coordinate categories, and the landmark fallback behave as §6.1a says.
+- Admin capture: a non-admin gets "not allowed" for `mela:adm:*`; a capture survives the next 10-min sync; a sheet-typed value overrides it.
+- No citizen latitude/longitude appears in `message_log`, the n8n execution data, or the DB (grep check).
 - The data owner signs off that the staging answers match the sheet.
 
 ### M2: Directory + go-live: weeks 5–6, ~8 dev-days
@@ -519,7 +584,9 @@ Effort is in developer-days for 1 developer, plus a part-time data/ops owner on 
 - The purge is verified on a copy.
 - No raw numbers are visible anywhere in Metabase.
 
-**Phase 1 total:** about 34.5 developer-days. The go-live path (M0–M2) is about 29.5 days (≈6 weeks), which fits the ~7 weeks to go-live with less than 1 week of buffer.
+**Phase 1 total:** about 37.5 developer-days. The go-live path (M0–M2) is about 32.5 days (≈6.5 weeks), which leaves **only 2–3 days of buffer** before ~10 Nov.
+
+**Slip rule:** if M1 runs late, 📍 Near me and admin capture are the first items to move. They can ship during the first Mela week without affecting anything else, because the feature stays switched off until coordinates exist anyway. Coordinates are captured in the set-up week, so the feature realistically goes live **when the camps are up (around 17–23 Nov)** whichever way the schedule falls.
 
 ---
 
@@ -533,6 +600,8 @@ Effort is in developer-days for 1 developer, plus a part-time data/ops owner on 
 | Mela data not verified in time | **High** | Wrong numbers published | Named owner, `verified` column, prod rejects unverified rows, sign-off in the M1 gate |
 | Officer transfers make the directory stale | High | Wrong contact | `last_verified` shown on every card; monthly verification reminder to the owner |
 | Traffic spike during the Mela | Low–Medium | Slow replies | Load test on the actual office machine; queue-mode profile ready |
+| Site coordinates not captured, or captured wrongly | Medium | Near me unavailable, or it points to the wrong spot | Admin tool with map-pin confirmation; `pin status` in the daily digest; the feature hides categories without coordinates; a sheet value can correct any point |
+| Citizens' GPS inaccurate in dense crowds | Medium | "Nearest" off by 100–200 m | Show the top 3 with "approx." distances; the walking link recalculates live in Maps |
 | Citizens send voice notes | High | Unanswered | Friendly redirect to the menu; log volume; voice-to-text as a future service |
 | n8n upgrade breaks nodes | Low | Outage | Pinned versions; upgrade only through staging + CI |
 
