@@ -1,115 +1,71 @@
-# Sonpur Mela WhatsApp Bot
+# Saran Citizen WhatsApp Bot
 
-A WhatsApp bot answering visitor questions about Sonpur Mela (Saran
-district) — festival history/general info; administrative contacts
-(temporary police stations, medical camps, veterinary camps, district/
-PHED/electricity control rooms, law-and-order desks); parking and
-accommodation; and the daily program schedule (morning/evening events,
-which act is the day's special attraction) — built on n8n and a
-self-hosted, locally-run LLM. No per-token API billing, no facility/
-contact data sent to a third-party model provider.
+A WhatsApp citizen-services bot for Saran district, built on **n8n** with
+**Postgres**, and using **Claude Haiku 4.5** only to understand free text.
+Phase 1 serves **Sonpur Mela** information. The Officer Directory and Scheme
+Eligibility plug in later without rebuilding the bot.
 
-Full design rationale and alternatives considered:
-[`/root/.claude/plans/i-want-to-create-cozy-boot.md`](/root/.claude/plans/i-want-to-create-cozy-boot.md)
-(architecture decisions, risks, and why this uses retrieval instead of
-fine-tuning).
+- Plan: [`docs/implementation-plan.md`](docs/implementation-plan.md)
+  ([PDF](docs/Saran-Citizen-WhatsApp-Bot-Plan.pdf))
+- Operations: [`docs/runbook.md`](docs/runbook.md)
+- New service: [`docs/adding-a-service.md`](docs/adding-a-service.md)
 
-## Architecture
+## How it works
 
 ```
-WhatsApp Cloud API (Meta) → n8n (self-hosted) → keyword routing
-                                                     │
-                        ┌────────────────────────────┼─────────────────────────────┐
-                        │                             │                             │
-              "today's program?"            direct DB lookup              embed question (Ollama)
-           exact-date lookup against      (police/medical/vet/           → vector search (pgvector)
-             program_schedule table      control room/law-order/           → LLM answers from retrieved
-              (no LLM, no RAG —          parking/accommodation)              records only (Ollama)
-              dates aren't "similar")               │                             │
-                        └────────────────────────────┼─────────────────────────────┘
-                                                      ▼
-                                         WhatsApp reply to citizen
+Meta webhook ─► core-00-router ─► begin turn (dedupe, rate limit, session)  ─► service workflow (by registry)
+                 │  signature check                                         └► core-02-llm (free text only)
+                 └► core-01-send (limits, phone guard, ordered delivery) ◄── contract-checked reply
 ```
 
-The schedule branch is separate from RAG on purpose: a semantic search
-can't distinguish "today's lineup" from "last week's" (both read as
-similarly-about-the-program text), so it needs an exact date match
-instead of similarity search.
-
-See `n8n/README.md` for the full setup walkthrough.
+- **Service registry.** `core.services` is the only thing the router knows
+  about services. Enabling a row adds it to the menu. With one service, "Hi"
+  opens that service directly.
+- **Contract.** A service gets `{lang, state, context, input, ...}` and returns
+  `{messages, next_state, context, done, log}`. It never calls WhatsApp itself.
+- **The LLM never states facts.** It only picks a route. Every phone number
+  sent must exist in `core.number_registry` (the phone guard).
 
 ## Repository layout
 
 ```
-docker-compose.yml       n8n + Ollama + Postgres/pgvector stack
-.env.example             configuration template (copy to .env)
-data/
-  facilities.csv         structured contact/location records - police, medical, veterinary,
-                          control room (district/PHED/electricity), law & order, parking, accommodation
-                          (mix of sourced-and-cited, and clearly-marked DUMMY-TEST-DATA/PLACEHOLDER rows
-                          still needing real data - see notes column per row)
-  history.md              festival history/general-info text, sourced and cited, plus a
-                          banned-items section explicitly caveated as unconfirmed for Sonpur specifically
-  program_schedule.csv    daily program/performer schedule (date, time slot, act, special-attraction flag) -
-                          currently all DUMMY-TEST-DATA; no real 2026 lineup is published yet
-scripts/
-  init.sql                Postgres schema (pgvector tables), auto-run on first container start
-  ingest.py               embeds data/* into Postgres for retrieval
-  requirements.txt
-n8n/
-  workflows/sonpur-mela-bot.json   importable n8n workflow
-  README.md               step-by-step setup (WhatsApp Cloud API, import, credentials, testing)
+n8n/src/core/*.js         router logic as plain, unit-tested JS modules
+n8n/src/services/*.js     service handlers (svc_echo = M0 contract proof, template)
+n8n/src/workflows/*.mjs   workflow declarations (nodes, wiring, fixed ids)
+n8n/workflows/**.json     GENERATED by scripts/build_workflows.mjs - never edit by hand
+sql/                      schema + seed (idempotent, applied by scripts/db_migrate.sh)
+scripts/                  build, migrate, import/export, dev_up (local stack without Docker)
+tests/                    unit, SQL, flow (end-to-end) tests; Graph + Anthropic mocks
+deploy/                   Caddyfile (path filter), DB init
+data/                     Sonpur Mela seed data (used from M1)
+docker-compose.yml        office machine (Cloudflare Tunnel) or VPS (Caddy + TLS)
 ```
 
-## Quickstart
+## Develop and test locally (no Docker needed)
+
+Requirements: Node ≥ 24, Python 3, a Postgres 16 you can create a DB in.
 
 ```bash
-cp .env.example .env    # fill in POSTGRES_PASSWORD, N8N_BASIC_AUTH_*, etc.
-docker compose up -d
+npm run build                      # regenerate n8n/workflows from n8n/src
+npm run check                      # generated JSON up to date + unit tests
+PGHOST=... PGUSER=... PGPASSWORD=... scripts/dev_up.sh   # migrate, mocks, import, start n8n
+set -a; source tests/test.env; set +a
+npm run test:sql                   # SQL asserts + template limits
+npm run test:flow                  # 23 end-to-end scenarios through the live n8n
+scripts/dev_up.sh stop
 ```
 
-Then follow `n8n/README.md` for WhatsApp Cloud API registration, importing
-the workflow, and loading real facility/history data.
+`dev_up.sh` uses `npx n8n@<pinned>` unless `N8N_BIN` points at an installed
+binary. CI (`.github/workflows/ci.yml`) runs exactly this on every push.
 
-## Data provenance note: the 2025 Mela order
+## Deploy
 
-Several rows in `data/facilities.csv` (Sonpur SDPO, District Magistrate/
-Sonpur SDO, Electricity Supply Executive Engineer, Civil Surgeon Saran,
-District Animal Husbandry Officer) are sourced from a real official
-document: the joint District Magistrate + SP administrative order for
-the 2025 Sonpur Mela (Memo No. 11178/C, dated 08.11.2025, 55 pages).
-That document contains far more than what's loaded here — full staffing
-lists for 13 temporary police posts, ghat/temple patrol rosters, medical
-camp staff, etc. — but almost all of it is explicitly scoped to the
-Mela's opening week (09–13 Nov 2025) or a specific named individual on
-duty that week, not durable for the rest of the ~32-day Mela, let alone
-2026. Only the standing office-holder directory (District Magistrate,
-SP, Civil Surgeon, department Executive Engineers — pages 50–53 of that
-memo) was pulled in, since those are institutional contacts rather than
-a week-specific duty roster. Every row from this source says so in its
-`notes` and is dated 2025 — reconfirm all of them before the 2026 Mela;
-office-holders in these positions change with routine staff transfers.
+See `docs/runbook.md`. In short:
 
-## Before this goes live
-
-- **Replace every `PLACEHOLDER`/`DUMMY-TEST-DATA`/`TODO`** in
-  `data/facilities.csv`, `data/history.md`, and
-  `data/program_schedule.csv` with data verified against an official
-  source (SP office, Civil Surgeon, District Magistrate/Mela Adhikari
-  orders, Art & Culture department for the program lineup once
-  published). The ingestion script refuses to embed anything still
-  marked `PLACEHOLDER`/`TODO`, but `DUMMY-TEST-DATA` rows are
-  deliberately *not* filtered — they exist to exercise the pipeline
-  end-to-end (including brand-new categories like parking, accommodation,
-  and the daily schedule) and will be answered to real users unless you
-  replace them. Search each file for `DUMMY-TEST-DATA` before launch.
-- **Updating data is a one-script operation.** Edit the CSV/Markdown,
-  re-run `python scripts/ingest.py` — no code, credentials, or workflow
-  changes needed. This is how "these numbers get updated time to time"
-  is meant to work in practice.
-- **Plan for on-prem uptime.** The LLM and n8n run on your own
-  machine for the month the Mela runs — that's now the single point of
-  failure for a public-facing service. At minimum: power backup (UPS) and
-  a health-check alert on the Ollama endpoint.
-- **Get WhatsApp Cloud API business verification started early** — it is
-  not instant.
+```bash
+cp .env.example .env               # fill in; back up N8N_ENCRYPTION_KEY and PGCRYPTO_KEY
+docker compose up -d postgres
+docker compose run --rm migrate
+docker compose run --rm import
+docker compose --profile tunnel up -d     # office machine; use --profile vps on a VPS
+```

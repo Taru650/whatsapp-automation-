@@ -58,7 +58,7 @@ More services must plug in later without rebuilding the chatbot. Every interacti
 ### 1b. Design risks fixed in this plan
 | # | Risk | Fix |
 |---|---|---|
-| R1 | n8n assigns new workflow IDs on import, which breaks dispatch-by-ID | Every workflow JSON carries a fixed `id`. Deploy with `n8n import:workflow` via `scripts/n8n_import.sh`. UI edits are followed by `scripts/n8n_export.sh` and a commit |
+| R1 | n8n assigns new workflow IDs on import, which breaks dispatch-by-ID; hand-edited workflow JSON can't be unit-tested | **Workflows are generated from source** (`n8n/src` → `scripts/build_workflows.mjs`) with fixed ids; Code-node logic is unit-tested JS. Deploy with `scripts/n8n_import.sh` (import + publish). The UI is for emergencies only (`scripts/n8n_export.sh`) |
 | R2 | Meta status callbacks (sent/delivered/read) run about 3× the inbound volume | Dropped at the first node. `EXECUTIONS_DATA_SAVE_ON_SUCCESS=none`, prune >72h. `core.message_log` is the audit trail |
 | R3 | Stale buttons tapped after the session expired | **Self-describing IDs** `svc:action:arg` (e.g. `mela:fac:medical`). Routing by ID prefix works without session state |
 | R4 | WhatsApp field limits: button title ≤20, list row title ≤24, row description ≤72, list button ≤20, ≤3 buttons, ≤10 rows, interactive body ≤1024, text ≤4096 | Meta rejects the whole message if any one field is over. The send workflow validates and truncates, and CI `check_templates.py` fails on overflow in hi or en |
@@ -120,7 +120,7 @@ Citizen ⇄ WhatsApp ⇄ Meta Cloud API ⇄ Cloudflare edge ⇄ cloudflared tunn
 
   The DNS and the Meta webhook URL stay the same, so citizens notice nothing. **This is rehearsed once before go-live** (M2 gate). It is automated by `scripts/provision_vps.sh`; the full criteria and procedure are in §2.4.
 
-**Component versions** (pinned in compose; exact tags chosen at M0 start): n8n 1.x · postgres:16 · cloudflare/cloudflared · metabase (M3).
+**Component versions** (pinned in compose): n8n **2.40.5** (needs Node ≥ 24) · postgres 16.13 · caddy 2.10 · cloudflared · metabase (M3).
 
 **Environments.** Two compose projects run on the same machine:
 - **staging:** Meta test number, `staging.<domain>` tunnel route, `ENV=staging`.
