@@ -1,14 +1,14 @@
 # Saran Citizen WhatsApp Bot: Detailed Implementation Plan
-### Phase 1: Sonpur Mela + District/Block Officer Directory
+### Phase 1: Sonpur Mela
 
-*Version 1.1 · 23 Sep 2026 (adds 📍 Near me + on-site coordinate capture) · Branch `claude/whatsapp-n8n-llm-chatbot-o9gtyo`*
+*Version 1.2 · 24 Sep 2026 · Phase 1 = Sonpur Mela only; local-first hosting with VPS fallback · Branch `claude/whatsapp-n8n-llm-chatbot-o9gtyo`*
 
 > **Summary.**
-> - **What:** a WhatsApp bot built on n8n where a citizen types "Hi" and chooses **Sonpur Mela** information or the **Officer Directory**.
+> - **What:** a WhatsApp bot built on n8n where a citizen types "Hi" and gets **Sonpur Mela** information: programme, control room, police, health and vet camps, parking, ghats.
 > - **Data:** it answers from Google Sheets that staff maintain, never from LLM guesses.
 > - **Near me:** a citizen can share their location to get the nearest police station, health centre or vet camp, with walking directions.
-> - **Growth:** new citizen services (Scheme Eligibility is next) plug in by adding a service row and a workflow, without rebuilding the bot.
-> - **Hosting:** an on-prem office machine behind a Cloudflare Tunnel.
+> - **Growth:** the **Officer Directory** and **Scheme Eligibility** are added later, with DM approval. They plug in by adding a service row and a workflow, without rebuilding the bot.
+> - **Hosting:** the office machine first (behind a Cloudflare Tunnel), with a pre-arranged Hostinger-type VPS as fallback. Measured go/no-go criteria decide the move.
 > - **Schedule:** go-live is targeted around **10 Nov 2026**, two weeks before the Mela opens, after three test-gated milestones.
 
 ## 0. Context
@@ -18,24 +18,24 @@
 - CSV data loaded by `scripts/ingest.py`
 - one monolithic workflow, `n8n/workflows/sonpur-mela-bot.json`, with keyword routing
 
-**The goal.** Turn the prototype into a **citizen-services WhatsApp platform**. A citizen sends any message and gets a menu of services.
+**The goal.** Turn the prototype into a **citizen-services WhatsApp platform**. A citizen sends any message and is served by the enabled services.
 
-**Phase 1 scope: exactly two services.**
-1. Sonpur Mela
-2. District/Block Officer Directory
+**Phase 1 scope: one service, Sonpur Mela.**
 
-**Scheme Eligibility is out of scope.** It will be added later as a plug-in service, without rebuilding the core (see §14).
+**The District/Block Officer Directory** (design ready, sample analysed) **and Scheme Eligibility** come in later phases, **after DM sir's approval**. They plug into the same core without rebuilding it (see §14).
 
 More services must plug in later without rebuilding the chatbot. Every interaction is logged for analytics and feedback.
 
 **Confirmed decisions**
-- **Build order:** Core platform → Mela → Directory → Analytics, with a test gate after each milestone.
+- **Build order:** Core platform → Sonpur Mela → Go-live readiness → Analytics, with a test gate after each milestone. After that: Directory, then Schemes.
 - **LLM:** hosted Claude Haiku 4.5 (`claude-haiku-4-5`). Ollama and pgvector are retired.
 - **Languages:** Hindi + English.
-- **Hosting:** an **office machine, on-prem**, reached through a Cloudflare Tunnel (§2).
+- **Hosting:** the **office machine first** (Cloudflare Tunnel, §2), with a **Hostinger-type private VPS** as the pre-arranged fallback (§2.4).
+  - A private VPS is acceptable because the Mela content is public-domain information.
+  - Citizen phone numbers and messages remain personal data, so they stay hashed/encrypted with limited retention on any host (§7).
+  - The user chose local-first over the recommendation of running production on the VPS; §2.4's criteria make that safe.
 - **WhatsApp:** the production number is live and verified.
 - **Duty-staff mobile numbers:** approved for publishing.
-- **Directory scope:** Saran district, sub-division, and block level, including **all block-level posts** (not only BDO/CO), plus police stations.
 - **Data format:** the samples are indicative. The bot reads the recommended template format in §5b.
 - **Data editing:** Google Sheets is where staff edit data. It is synced into Postgres every 10 min; the bot never reads Sheets live.
 
@@ -78,7 +78,7 @@ More services must plug in later without rebuilding the chatbot. Every interacti
 
 ---
 
-## 2. Architecture (on-prem office machine, as decided)
+## 2. Architecture (office machine first, VPS fallback)
 
 ```
                      ┌──────────── Office machine (Ubuntu 24.04 LTS, Docker) ─────────────────────────────┐
@@ -86,7 +86,7 @@ Citizen ⇄ WhatsApp ⇄ Meta Cloud API ⇄ Cloudflare edge ⇄ cloudflared tunn
                      │   (TLS, DDoS, only /webhook/* and /healthz allowed)          │ Execute Workflow    │
                      │                                                              ├─► core/* services/* │
                      │   Postgres 16 ◄──────────────────────────────────────────────┘                    │
-                     │   dbs: n8n · citizen_bot (schemas core, svc_mela, svc_directory)                    │
+                     │   dbs: n8n · citizen_bot (schemas core, svc_mela; later svc_directory)              │
                      │   Metabase (M3) · backup job → off-site (Google Drive via rclone)                   │
                      │   Remote admin: Tailscale (no open ports)                                           │
                      └────────────────────────────── UPS + inverter · ISP-1 + 4G failover ────────────────┘
@@ -118,7 +118,7 @@ Citizen ⇄ WhatsApp ⇄ Meta Cloud API ⇄ Cloudflare edge ⇄ cloudflared tunn
   3. Restore the dump.
   4. Install `cloudflared` with the same tunnel token.
 
-  The DNS and the Meta webhook URL stay the same, so citizens notice nothing. **This is rehearsed once before go-live** (M2 gate).
+  The DNS and the Meta webhook URL stay the same, so citizens notice nothing. **This is rehearsed once before go-live** (M2 gate). It is automated by `scripts/provision_vps.sh`; the full criteria and procedure are in §2.4.
 
 **Component versions** (pinned in compose; exact tags chosen at M0 start): n8n 1.x · postgres:16 · cloudflare/cloudflared · metabase (M3).
 
@@ -127,6 +127,40 @@ Citizen ⇄ WhatsApp ⇄ Meta Cloud API ⇄ Cloudflare edge ⇄ cloudflared tunn
 - **prod:** the live number, `bot.<domain>`, `ENV=prod`.
 
 Each has its own DB and env file. Promotion from staging to prod imports the same workflow JSON files.
+
+### 2.4 Fallback to a VPS: criteria, standby, switch
+**Burn-in.** The office machine runs the staging stack **24×7 from the start of M1** (about 4 weeks before go-live). UptimeRobot records uptime from day one, so the decision rests on measured data rather than impressions.
+
+**Go/no-go at the M2 gate (≈ 3 Nov).** Go live on the VPS instead if **any** of these fails:
+
+| # | Criterion (over the burn-in) | Fail if |
+|---|---|---|
+| H1 | `/healthz` uptime (UptimeRobot) | < 99.5% (≈ more than 3.5 h down in 4 weeks) |
+| H2 | Longest single outage | > 30 min |
+| H3 | Pull the power cable, then restore power | Needs a human to recover |
+| H4 | Pull the primary ISP cable | 4G failover doesn't restore the webhook within 5 min |
+| H5 | k6 load test on the machine | p95 > 3 s at 30 msg/s |
+| H6 | Office constraints | IT blocks outbound HTTPS to Cloudflare/Meta/Anthropic/Google, or the machine is shared or switched off at night |
+
+**Standby VPS**
+- **What:** a Hostinger (or similar) KVM VPS with 2+ vCPU, 8 GB RAM, and an **India data centre if offered** [Likely: Hostinger lists one; verify at purchase]. Cost ≈ ₹700–1,500/month [Guessing: check current pricing]. It is bought only for the M2 drill and on activation.
+- **`scripts/provision_vps.sh`:** one idempotent script that:
+  1. installs Docker, ufw, fail2ban, Tailscale, and unattended-upgrades
+  2. installs either the same `cloudflared` tunnel token or Caddy + Let's Encrypt
+  3. restores the latest off-site backup
+  4. imports the workflows
+
+  It is tested once in M2 on a throwaway VPS.
+- **The webhook URL (`bot.<domain>`) doesn't change**, so **Meta needs no re-configuration**. Only the tunnel/DNS target moves.
+
+**Mid-Mela triggers** (after go-live on the office machine). Move to the VPS **the same day** if:
+- a single outage lasts **> 1 hour**, or
+- there are **3 or more outages in 24 h**, or
+- the office or machine can't be reached for maintenance.
+
+The runbook procedure takes about 1 hour. The named technical owner decides; the move is pre-approved by this plan.
+
+**Recorded decision.** The recommendation was "VPS for production, office machine for staging", which removes the #1 outage risk for about ₹1k/month. The user chose local-first. This can be revisited at the go/no-go without any code change.
 
 ---
 
@@ -186,7 +220,11 @@ Rules:
 ### 3.3 Registry (`core.services`)
 `service_key PK, id_prefix UNIQUE, title_hi, title_en (≤20), description_hi/en (≤72), menu_order, enabled, workflow_id, intent_hint_en, intent_hint_hi, subtypes jsonb {key: hint}, keywords text[]`.
 
-- **Main menu.** ≤3 enabled services → reply buttons. Otherwise a list, where the row description comes from `description_*`.
+- **Main menu.**
+  - **Exactly 1 enabled service** (Phase 1, Mela only): "Hi" goes **straight to that service's menu**, with no one-button main menu.
+  - 2–3 services: reply buttons.
+  - More than 3: a list, where the row description comes from `description_*`.
+  - Enabling the Directory later brings the main menu back automatically.
 - **LLM prompt.** Built from `services` + `subtypes` at call time, so new services are classified automatically.
 
 ### 3.4 LLM specification (`core/02-llm`, HTTP Request → `POST /v1/messages`)
@@ -257,38 +295,27 @@ Rules:
   - Returns `place, distance_m, on-duty person, phone`.
   - Plain SQL is enough for about 50 sites, so no PostGIS is needed.
 
-### `svc_directory` schema (`20_svc_directory.sql`), shaped by the real sample
-- **`officers`** `(id, level, unit_en, unit_hi NULL, designation_en, designation_hi NULL, person_name, phone NULL, email NULL, keywords text[], sort, last_verified)`.
-  - `level` is one of: `district`, `subdivision`, `block`, `circle`, `police`.
-  - `unit_en` holds the block, circle, or thana name ("Amnour"), the subdivision ("Sonpur"), or "Saran" for district level.
-- **`blocks`** `(name_en, name_hi, aliases text[])`: the 20 Saran blocks. Aliases include Sadar = Chapra, Rivilganj = Revilganj, and Isuapur = Ishuapur.
-  - Used for the paginated list and fuzzy matching.
-- **Indexes:** trigram indexes on `unit_en`, `designation_en`, `person_name`, and `blocks.aliases`.
-- **Function:** `replace_officers(jsonb)`.
-
 ---
 
 ## 5. Data: what the samples show, and the sheet format the bot will read
 
-### 5a. Findings from the samples (`Sonpur_Mela_Data.xlsx` + Directory Google Sheet)
+### 5a. Findings from the Mela sample (`Sonpur_Mela_Data.xlsx`)
 | # | Finding | Evidence | Consequence / action |
 |---|---|---|---|
-| D1 | **Both files are print layouts, not data tables.** They use merged title rows, two-row headers, several sections stacked in one tab (the directory has BDO, CO, Thana, District, and Sub-division stacked), and shifts as column groups | Every tab | A sync can't reliably parse these. **Decision:** we convert them once into a "bot format" Google Sheet: one tab per table, one header row, no merged cells. Staff keep editing that sheet (§5b). The one-time conversion script `scripts/convert_samples.py` is part of M1/M2 |
+| D1 | **The files are print layouts, not data tables.** They use merged title rows, two-row headers, and shifts as column groups; the directory sample also stacks several sections in one tab | Every tab | A sync can't reliably parse these. **Decision:** we convert them once into a "bot format" Google Sheet: one tab per table, one header row, no merged cells. Staff keep editing that sheet (§5b). The one-time conversion script `scripts/convert_samples.py` is part of M1/M2 |
 | D2 | **Legacy Hindi font encoding** | Health centre "Nakhas ¼u[kk'k½" is Kruti Dev text, not Unicode, so it would reach citizens as garbage | The sync rejects cells containing Kruti Dev markers (`¼ ½ [k` patterns). Hindi must be typed in Unicode. The converter strips the part and flags it |
 | D3 | **Invalid phone** | Thana "Sawaich Ghat" Shift-2: `709095094` (9 digits) | Validator: mobiles must be 10 digits starting 6–9; landlines need an STD code with a leading 0. The row is rejected with its row number in the alert |
-| D4 | **A landline stored without its leading 0 looks like a mobile** | Forest Division Officer `6152232660` (Chapra STD 06152). DM `06152-240001` is correct | Excel stores numbers as integers and drops the leading 0. **The phone column must be plain text** in the sheet. `6152…`/`6158…` patterns are flagged for manual check |
+| D4 | **A landline stored without its leading 0 looks like a mobile** | Seen in the directory sample: Forest Division Officer `6152232660` (Chapra STD 06152). The same risk applies to any Mela landline | Excel stores numbers as integers and drops the leading 0. **The phone column must be plain text** in the sheet. `6152…`/`6158…` patterns are flagged for manual check |
 | D5 | **Multiple people/phones in one cell** | Control Room Sanitation & Electricity desks hold 2 officers and "8709898293 & 7970663565" | `phones` is stored as an array. The bot format has separate `phone_1` and `phone_2` columns |
 | D6 | **Vertical merged cells mean "same for all shifts"** | Control Room G4:G6, H4:H6, I4:I6 | Converter: the value applies to shifts 1–3. Bot format: a blank shift means all-day |
-| D7 | **Suspected copy-paste errors** | Director DRDA and Incharge Legal Section share `9031071905`. Nagar PS and Nagra PS share an email. "Bahadur Prasad Yadav" is on duty at two thanas with different numbers | A sync **warning** (not a reject) lists duplicate phones/emails across different people; the data owner confirms |
+| D7 | **Suspected copy-paste errors** | Mela: "Bahadur Prasad Yadav" is on duty at two thanas with different numbers. (The directory sample has more: shared phone/email between different officers.) | A sync **warning** (not a reject) lists duplicate phones/emails across different people; the data owner confirms |
 | D8 | **The Control Room tab lists internal duty officers but no public helpline number** | The tab has no "call this number" line | Citizens need one number. **Ask the district for the public control room number**; it goes in `control_room_public`. The desk roster is shown underneath |
 | D9 | **Accommodation and do's & don'ts are not in the sample**; **Ghats are** (6) | Sheet list | Mela menu rows are **data-driven**: a category with 0 rows is hidden automatically. Ghats become a menu row |
 | D10 | **No lat/lon** for any site | Blank columns | The **"📍 Near me" feature (§6.1a) depends entirely on coordinates.** The temporary sites only exist once they are set up, so coordinates are **captured on-site by staff through the bot's admin tool (§6.1b)** in the set-up week. Until then the feature switches itself off per category |
 | D11 | **Schedule is 2025** (22 Nov–7 Dec 2025, with gaps on 4 and 6 Dec). No time or venue. Artist names are comma-joined | Mela Schedule tab | Good staging seed. The sync **warns** if no event date falls in the next 30 days. "Today" with no row → "No programme listed today" + the next listed date |
-| D12 | **Police thanas aren't linked to blocks** (39 district thanas vs 20 blocks). Sub-division rows all read "Subdivisional Officer" and only the email reveals Chapra/Marhaura/Sonpur | Directory sheet | A "block → department" flow doesn't fit. The directory is navigated **by office level first** (§6.2). Converter sets `unit_en` for sub-divisions from the email |
-| D13 | **All data is English only** | Both files | The bot's own text is in hi/en. Names and places stay in English unless staff fill the optional `*_hi` columns. We **won't machine-transliterate personal names**, because wrong Hindi names on an official channel are worse than English ones |
+| D13 | **All data is English only** | Both samples | The bot's own text is in hi/en. Names and places stay in English unless staff fill the optional `*_hi` columns. We **won't machine-transliterate personal names**, because wrong Hindi names on an official channel are worse than English ones |
 | D14 | **Long names exceed WhatsApp list limits** | "Veterinary Hospital Mobile Ambulance Van, Dist. Animal Husbandry Office" (74 chars, the list-row title limit is 24) | Places are listed in **text cards, not list rows**. Lists are used only for categories, blocks, and pages |
 | D15 | Mela duty staff numbers are personal mobiles (doctors, SIs) | Health/Thana tabs | **Decided: publishing is approved.** Keep a copy of the approval order in `docs/approvals/`. A `settings.publish_duty_phones` flag (default TRUE) allows an instant switch to names + helpline if an officer objects |
-| D16 | Police display names carry disambiguation suffixes ("Randhir Kumar-2", "Mukesh Kumar-01") | Directory Thana section | The display strips a trailing `-\d+`; the stored value is kept as-is |
 
 ### 5b. Recommended data format (the samples may change, so this is the target format)
 
@@ -326,17 +353,8 @@ places:  VC08 | vet_camp | Veterinary Hospital, Sonpur | … | (s1–s3 blank) |
 control: Sanitation & Water | … | allday_name: Shri Nikhil Kumar, AE PHED Chhapra | allday_phone: 8709898293 | phone_2: 7970663565
 ```
 
-#### Spreadsheet 2: "Saran Officer Directory – Bot Data"
-| Tab | Columns | One row = |
-|---|---|---|
-| `README` | rules | n/a |
-| `officers` | id, level▼ (district, subdivision, block, circle, police, other), unit_en, **key** (TRUE = show on the block summary card), unit_hi, designation_en, designation_hi, short_title_en (≤24 chars), person_name, phone, phone_2, email, office_address, **keywords** (comma-separated citizen words, e.g. `ration, राशन, PDS`), sort, active, last_verified, verified, updated_by | one post. Transfers are made by **editing the name/phone on the same row**, never by adding a row |
-| `units` | unit_en, unit_hi, level▼, aliases (e.g. `Sadar, Chapra, छपरा`) | one block, circle, subdivision or thana name, used for search and menus |
-
-**Why `keywords` matters:** citizens ask by need ("pension", "zameen", "ration card"), not by designation. A data owner who fills `keywords` improves search more than any code change does. The LLM only falls back to it when keywords miss.
-
 **Deliverables for this format** (built in M1/M2):
-- `data/templates/Sonpur_Mela_Bot_Data.xlsx` and `data/templates/Saran_Officer_Directory_Bot_Data.xlsx`, with dropdowns, plain-text phone columns, frozen headers, the README tab, and your sample already converted in. You upload them to Google Drive as Sheets.
+- `data/templates/Sonpur_Mela_Bot_Data.xlsx` (the Directory template follows in its phase), with dropdowns, plain-text phone columns, frozen headers, the README tab, and your sample already converted in. You upload them to Google Drive as Sheets.
 - `scripts/convert_samples.py`, which converts the print-layout files you already have into the template, plus a flag report.
 - `docs/data-entry-guide.md` (hi + en, 2 pages) for the data owners.
 
@@ -411,7 +429,247 @@ Typing coordinates by hand into a sheet is error-prone (swapped lat/lon, missing
 
 **Effort on the ground:** about 50 sites. One or two staff on a bike can do it in about a day [Guessing], once the camps and thanas are physically up, typically in the week before the Mela opens.
 
-### 6.2 `svc_directory` (id_prefix `dir`). Navigation by office level, matching the data (D12)
+## 7. Security & privacy
+- **Network:** there are no inbound ports on the office machine. The Cloudflare Tunnel exposes only `/webhook/*` and `/healthz`. The n8n editor, Postgres, and Metabase are bound to 127.0.0.1 and reached over Tailscale.
+- **On the fallback VPS:** `ufw` allows only 80/443 (none at all if the tunnel is reused). SSH is reachable only via Tailscale. `fail2ban` and `unattended-upgrades` are enabled.
+- **Public vs personal data:** the Mela content is public-domain, which is why a private VPS is acceptable. Citizens' phone numbers and messages are personal data under the DPDP Act, so they stay hashed/encrypted, under 180-day retention and with no stored locations, **whichever host is used**.
+- **Secrets:** kept in `.env` (chmod 600), never committed. Includes `N8N_ENCRYPTION_KEY`, `META_APP_SECRET`, `PHONE_HASH_SECRET`, and `PGCRYPTO_KEY`, all backed up offline.
+- **Webhook authenticity:** the HMAC signature check (E2), plus the verify-token handshake.
+- **DPDP Act 2023:**
+  - **Notice:** a one-line privacy notice on first contact.
+  - **Minimisation:** analytics use the hash only; the raw number is encrypted at rest.
+  - **Retention:** 180 days, enforced by the nightly purge.
+  - **LLM:** receives message text only.
+  - **Location:** citizen coordinates are processed in memory and never stored or logged; only distance buckets are logged. Admin captures store the site's coordinates, not the person's.
+- **Ethics:** the bot never asks for Aadhaar or other identity numbers.
+
+## 8. Operations
+- **Deploy:** `git pull && scripts/n8n_import.sh && psql -f sql/*.sql`. Credentials are created once per environment and documented.
+- **Backups:**
+  - nightly `pg_dump` of both DBs, 14-day local rotation plus an off-box copy
+  - weekly copy of the env files and encryption keys to secure storage
+  - one restore drill before go-live
+- **Monitoring:**
+  - an external uptime check on `/healthz` every 5 min
+  - the Error Trigger → `admin_alert`
+  - a sync-staleness check: no OK sync in 1h → alert
+  - the daily report includes error count and p95 latency
+- **`docs/runbook.md`:** covers restart, token rotation, "wrong number published" hotfix (edit sheet → sync or force-run), disabling a service, disabling the LLM, and rollback (re-import the previous git tag).
+
+## 9. Testing strategy
+| Layer | Tool | What it covers |
+|---|---|---|
+| SQL | `tests/sql/*.sql` via `psql` + `pgTAP`-style asserts | `begin_turn` (dedupe, rate limit), `current_shift`/`on_duty` shift boundaries, `nearest()` (known points with hand-computed distances, inactive/unverified/no-coordinate sites excluded, sheet value overrides capture), `replace_*` atomicity (sync leaves `place_coords` intact) |
+| Templates | `tests/check_templates.py` | WhatsApp field limits in hi and en, and no missing translations |
+| Flow | `tests/run_flow_tests.py` + `tests/payloads/*.json` + `tests/services/<key>/*.yaml` | Real-shaped Meta payloads are sent to the staging webhook (mocks on). Asserts on captured outbound payloads, `message_log`, and `sessions` |
+| Contract | same runner via `99-test-harness` | Output schema of every service for its standard inputs |
+| LLM routing | `tests/llm/free_text.yaml` (50 hi/Hinglish/en lines, labelled) | Run against the real API; ≥90% correct service/subtype |
+| Load | `tests/k6/load.js` | 30 msg/s for 10 min against mocks: p95 <3s, 0 lost, 0 duplicates |
+| UAT | `docs/uat-mX.md` | Real phones, every path, both languages |
+
+**CI:** GitHub Actions `ci.yml` runs on every push:
+1. Starts compose in `ENV=test` with the mocks.
+2. Applies the SQL.
+3. Imports the workflows.
+4. Runs the SQL tests, template checks, and flow and contract tests.
+
+The LLM-routing and load tests are run manually at their gates.
+
+---
+
+## 10. Milestones, tasks and estimates
+Effort is in developer-days for 1 developer, plus a part-time data/ops owner on the client side.
+
+### Week-1 prerequisites (client side; these block go-live)
+- [x] WhatsApp number live and verified
+- [ ] Meta: share the permanent System User token, Phone Number ID, **App Secret** (for signature checks); submit the `admin_alert` utility template; keep a separate **Meta test number for staging**
+- [ ] Office machine meeting §2.2 (dedicated, Ubuntu-ready), UPS, 4G failover; it runs 24×7 from M1 for the burn-in (§2.4)
+- [ ] **Hostinger (or similar) account** in the department's/owner's name, ready for the M2 drill and fallback (§2.4)
+- [ ] **Named technical owner** authorised to trigger the VPS move (§2.4)
+- [ ] A (sub)domain with its DNS on Cloudflare (free account); IT confirms outbound HTTPS to Cloudflare, Meta, Anthropic and Google is allowed
+- [ ] Off-site backup target (a Google Drive folder or similar)
+- [ ] Written approval for the hosted LLM (otherwise go live with `LLM_ENABLED=false`)
+- [ ] Google service account; Mela sheet created and shared
+- [ ] Named data owner for the Mela sheet
+- [x] Sample data received: `Sonpur_Mela_Data.xlsx` (7 tabs), plus the Directory Google Sheet (118 officers, kept for the later phase)
+- [ ] **Public control room helpline number(s)** for the Mela (D8)
+- [x] Publishing duty-staff mobiles approved (D15): file a copy of the order
+- [ ] Unicode spelling of "Nakhas" (the cell uses Kruti Dev encoding, D2); corrected numbers for D3/D4; confirm the D7 duplicates
+- [ ] **Mela centre point and radius** (e.g. the Harihar Nath temple gate, 5 km) for the "outside the Mela area" check
+- [ ] **Field staff (1–2 people, about 1 day) in the Mela set-up week** to pin every thana, health centre, vet camp, parking area and ghat with the admin tool (§6.1b); their numbers are added to `ADMIN_WA_NUMBERS`
+- [ ] Service account given **Editor** access to the Mela sheet (for coordinate write-back)
+- [ ] Optional: accommodation list, do's & don'ts, Hindi names
+- [ ] The 2026 programme schedule, when announced (the sample is 2025)
+- [ ] Later: **DM approval** to enable the Officer Directory (and afterwards Scheme Eligibility)
+
+### M0: Core platform: weeks 1–2, ~11 dev-days
+| Task | Days |
+|---|---|
+| Office machine setup: Ubuntu, Docker, systemd, Tailscale, cloudflared tunnel + access rules, UPS/boot settings | 1 |
+| Compose rewrite: pinned versions, Postgres dbs, env, fixes E4–E6; staging + prod stacks | 1 |
+| `00_core.sql`: tables, `begin_turn`/`end_turn`, views, seed services/templates | 1.5 |
+| Router `00-router`: signature check, explode, dedupe, normalize, route, dispatch, end turn | 2 |
+| `01-send`: renderer, limit validator, phone guard, retries, logging | 1 |
+| `02-llm`: classifier + kill switch; `08-error`; `03-admin-alert` | 1 |
+| `svc_template` + `svc_echo`; `99-test-harness` | 0.5 |
+| Mocks, flow runner, template checker, CI | 2 |
+| `n8n_export.sh` / `n8n_import.sh`, fixed IDs, runbook skeleton | 1 |
+
+**Gate M0:**
+- CI green.
+- Flow tests pass for: text, button, list, location, voice, status callback (no execution saved), batched webhook (both messages answered), duplicate ID (one reply), bad signature (rejected), stale button (correct), double-tap (consistent), rate limit.
+- With only `svc_mela` enabled (via `svc_echo` in M0), "Hi" opens that service's menu directly. Enabling a 2nd service shows 2 buttons, and a 4th registry row flips the menu to a list.
+- A fresh-instance import works with credentials as the only manual step.
+- A real round-trip works on the Meta test number.
+
+### M1: Sonpur Mela: weeks 3–5, ~12.5 dev-days
+| Task | Days |
+|---|---|
+| `10_svc_mela.sql`: shifts, places, duty, control room, events, `current_shift`/`on_duty`, `replace_*` (the office machine starts the 24×7 staging burn-in, §2.4) | 1 |
+| Template workbooks (dropdowns, text phone columns, README) + `scripts/convert_samples.py` (print layout → template: expand merged cells, split multi-phone cells, detect Kruti Dev text, flag bad phones) + conversion report + data-entry guide | 2 |
+| `sync_mela` with validation (D2–D7, D11) and alerts/digest | 1.5 |
+| `svc_mela` workflow: data-driven menu, today/schedule, control room on-duty, category cards with current shift, all-shifts roster, place-name lookup, ask (Q&A mode) | 3 |
+| Fixtures (built from the real 2025 sample, re-dated) + SQL shift tests + 30-line LLM set | 1.5 |
+| **📍 Near me (§6.1a):** `nearest()` SQL, location request/receive, radius check, landmark fallback, directions link + map pin, card buttons; core send support for `location` / `location_request` messages | 2 |
+| **Admin coordinate capture (§6.1b):** `core.admins`, `mela:adm:*` flow, `place_coords`, sheet write-back, `pin status`, digest line | 1 |
+| UAT on staging with the data owner (including a walk test at 3 real points with the admin tool and near-me) | 0.5 |
+
+**Gate M1:**
+- All fixtures pass in hi and en.
+- Shift tests pass: 05:59/06:00, 13:59/14:00, 21:59/22:00, and 02:00 (Shift-3 across midnight). Merged-cell desks show on every shift.
+- The converter reproduces every source row: 5 health centres × 3 shifts, 14 thanas × 3, 11 vet camps, 18 parking, 6 ghats, 14 events, and 5 control desks.
+- The converter report flags D2, D3, D4 and D7 items, and none of them reaches citizens.
+- A broken sheet leaves the data unchanged and raises one alert.
+- LLM routing ≥90%, with 0 invented numbers; the 30-line set includes 8 "near me" phrasings in Hindi, Hinglish and English.
+- Near me: for 10 test origins, the returned top-1 matches a hand-checked nearest site. Directions links open walking navigation to the right point on Android and iPhone. Origins outside the radius, no-coordinate categories, and the landmark fallback behave as §6.1a says.
+- Admin capture: a non-admin gets "not allowed" for `mela:adm:*`; a capture survives the next 10-min sync; a sheet-typed value overrides it.
+- No citizen latitude/longitude appears in `message_log`, the n8n execution data, or the DB (grep check).
+- The data owner signs off that the staging answers match the sheet.
+
+### M2: Go-live readiness: week 6, ~4 dev-days
+| Task | Days |
+|---|---|
+| k6 load test on the office machine (+ queue mode only if it fails) | 1 |
+| Off-site backups + `scripts/provision_vps.sh` + **restore drill onto a throwaway Hostinger-type VPS** (§2.4) | 1.5 |
+| UptimeRobot review, power-cut / ISP-failover test, runbook complete, **hosting go/no-go against H1–H6** recorded in `docs/hosting-decision.md` | 0.5 |
+| Prod stack + production number cut-over, UAT with about 20 staff phones, Hindi copy review | 1 |
+
+**Gate M2:**
+- Load test meets the targets.
+- The restore drill onto a fresh VPS completes in under 1 hour.
+- **Hosting go/no-go:** all of H1–H6 pass → go live on the office machine. Any fail → go live on the VPS (allow 1 extra day).
+- Pulling the power cable and the primary internet cable: the bot recovers without anyone touching it (H3/H4).
+- UAT sign-off.
+- **Go-live around 10 Nov**, with the prod webhook switched to the production number.
+
+### M3: Analytics & feedback: weeks 7–8 (during the Mela), ~5 dev-days
+| Task | Days |
+|---|---|
+| Metabase container + read-only DB user on views | 1 |
+| Dashboards: daily users/messages, per service/subtype, top free-text themes, 👎 rate, unanswered list, peak hours, LLM tokens/cost | 2 |
+| `85-daily-report` at 08:00 IST via `admin_alert` + email; `09-purge` job | 1.5 |
+| Weekly `unanswered` review → keyword/menu/data fixes | 0.5 (+ ongoing) |
+
+**Gate M3:**
+- A sampled day reconciles with `message_log`.
+- The purge is verified on a copy.
+- No raw numbers are visible anywhere in Metabase.
+
+**Phase 1 total:** about 32.5 developer-days (M0 11 + M1 12.5 + M2 4 + M3 5). The go-live path (M0–M2) is about **27.5 days (≈5.5 weeks)**, which leaves **about 1 week of buffer** before ~10 Nov.
+
+**Slip rule** (less likely to be needed now): if M1 runs late, 📍 Near me and admin capture are the first items to move. They can ship during the first Mela week without affecting anything else, because the feature stays switched off until coordinates exist anyway. Coordinates are captured in the set-up week, so the feature realistically goes live **when the camps are up (around 17–23 Nov)** whichever way the schedule falls.
+
+---
+
+## 11. Risk register
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| `admin_alert` template not approved | Low | No WhatsApp staff alerts | Email/SMS alerts as backup |
+| LLM approval refused | Medium | Weaker free-text handling | `LLM_ENABLED=false` still covers every service via menus |
+| **Office machine / power / internet outage during the Mela** | **Medium–High** | Bot silent | §2.2 hardening; 4-week burn-in measured against H1–H6 → go/no-go at M2; Hostinger-type VPS standby with a rehearsed 1-hour move; mid-Mela triggers for a same-day move (§2.4) |
+| Office IT blocks Cloudflare/Anthropic egress | Medium | Can't go live on-prem | Confirm in week 1 (H6); go live on the VPS instead |
+| Mela data not verified in time | **High** | Wrong numbers published | Named owner, `verified` column, prod rejects unverified rows, sign-off in the M1 gate |
+| Duty roster changes mid-Mela not updated in the sheet | Medium | Wrong on-duty contact | The daily digest shows the age of `verified`; the data owner updates it by 10 am; `publish_duty_phones` switch |
+| Traffic spike during the Mela | Low–Medium | Slow replies | Load test on the actual office machine; queue-mode profile ready |
+| Site coordinates not captured, or captured wrongly | Medium | Near me unavailable, or it points to the wrong spot | Admin tool with map-pin confirmation; `pin status` in the daily digest; the feature hides categories without coordinates; a sheet value can correct any point |
+| Citizens' GPS inaccurate in dense crowds | Medium | "Nearest" off by 100–200 m | Show the top 3 with "approx." distances; the walking link recalculates live in Maps |
+| Citizens send voice notes | High | Unanswered | Friendly redirect to the menu; log volume; voice-to-text as a future service |
+| n8n upgrade breaks nodes | Low | Outage | Pinned versions; upgrade only through staging + CI |
+
+## 12. Running cost estimate (Mela month) [Guessing: volumes are assumptions]
+- **Hosting:**
+  - **Office machine:** existing, or about ₹60–80k one-time if bought, plus a UPS.
+  - **Connectivity:** a 4G backup plan at about ₹300–500/month; Cloudflare Tunnel is free; the domain is about ₹800/year.
+  - **Fallback VPS** (Hostinger-type): about ₹700–1,500/month **only if activated**, plus about ₹100–200 for the M2 drill.
+- **WhatsApp:** [Likely] free for replies to citizen-initiated chats (the service window). Utility templates for admin alerts cost a few paise to about ₹0.15 each.
+- **Claude Haiku 4.5** ($1 input / $5 output per MTok):
+  - Assume 50k free-text calls × ~1.5k input + 200 output tokens.
+  - That gives ≈ $75 input + $50 output, about **$125 (≈₹10.5k)** for the whole Mela.
+  - Button taps cost nothing because they never call the LLM.
+
+## 13. Immediate next steps
+1. **District / client side:** close the week-1 prerequisites in §10. The ones that most affect the schedule are:
+   - the office machine (and its 24×7 burn-in from M1) and the Cloudflare domain
+   - the Meta App Secret and a test number
+   - the public control room number
+2. **Development:** start M0 (core platform) on the staging stack as soon as the office machine is available. Until then, development runs on a laptop with the same Docker setup.
+3. **Data owners:** receive the template workbooks and the data-entry guide in M1, and start moving the 2026 duty orders into them as soon as the orders are issued.
+
+---
+
+## 14. Later phases (out of Phase 1 scope)
+
+### How any new service plugs in (no router change)
+1. Copy `svc_template` and give it a new fixed workflow ID.
+2. Add a new `svc_<key>` DB schema.
+3. Write fixtures and pass the contract test.
+4. Insert one `core.services` row and its templates.
+5. Enable it on staging, run UAT, then enable it on prod.
+
+The main menu grows automatically. In Phase 1 (one service), "Hi" opens the Mela menu directly. With 2–3 services it shows reply buttons, and with more than 3 a list.
+
+### Officer Directory (next phase, after DM approval): design ready
+**Effort:** about 7 dev-days.
+- 1.5 d: schema, sheet, and sync
+- 3 d: the service
+- 1 d: fixtures
+- 1 d: UAT and go-live
+- 0.5 d: converting the sample
+
+**Scope agreed so far:** Saran district, sub-division, and block level, including **all block-level posts** (not only BDO/CO), plus police stations.
+
+**Needs before start:** DM approval, block-level officer lists for all 20 blocks, and a named data owner.
+
+**Gate:** 30 real-style queries resolve to the right officer in ≥90% of cases ("BDO Dighwara", "Sonpur CO", "ration card complaint", "DM number", "Derni thana"), **with no core feature change**.
+
+#### Data model
+##### `svc_directory` schema (`20_svc_directory.sql`), shaped by the real sample
+- **`officers`** `(id, level, unit_en, unit_hi NULL, designation_en, designation_hi NULL, person_name, phone NULL, email NULL, keywords text[], sort, last_verified)`.
+  - `level` is one of: `district`, `subdivision`, `block`, `circle`, `police`.
+  - `unit_en` holds the block, circle, or thana name ("Amnour"), the subdivision ("Sonpur"), or "Saran" for district level.
+- **`blocks`** `(name_en, name_hi, aliases text[])`: the 20 Saran blocks. Aliases include Sadar = Chapra, Rivilganj = Revilganj, and Isuapur = Ishuapur.
+  - Used for the paginated list and fuzzy matching.
+- **Indexes:** trigram indexes on `unit_en`, `designation_en`, `person_name`, and `blocks.aliases`.
+- **Function:** `replace_officers(jsonb)`.
+
+#### Findings from the directory sample
+| # | Finding | Evidence | Consequence / action |
+|---|---|---|---|
+| D12 | **Police thanas aren't linked to blocks** (39 district thanas vs 20 blocks). Sub-division rows all read "Subdivisional Officer" and only the email reveals Chapra/Marhaura/Sonpur | Directory sheet | A "block → department" flow doesn't fit. The directory is navigated **by office level first** (§6.2). Converter sets `unit_en` for sub-divisions from the email |
+| D16 | Police display names carry disambiguation suffixes ("Randhir Kumar-2", "Mukesh Kumar-01") | Directory Thana section | The display strips a trailing `-\d+`; the stored value is kept as-is |
+
+#### Sheet format
+##### Spreadsheet: "Saran Officer Directory – Bot Data"
+| Tab | Columns | One row = |
+|---|---|---|
+| `README` | rules | n/a |
+| `officers` | id, level▼ (district, subdivision, block, circle, police, other), unit_en, **key** (TRUE = show on the block summary card), unit_hi, designation_en, designation_hi, short_title_en (≤24 chars), person_name, phone, phone_2, email, office_address, **keywords** (comma-separated citizen words, e.g. `ration, राशन, PDS`), sort, active, last_verified, verified, updated_by | one post. Transfers are made by **editing the name/phone on the same row**, never by adding a row |
+| `units` | unit_en, unit_hi, level▼, aliases (e.g. `Sadar, Chapra, छपरा`) | one block, circle, subdivision or thana name, used for search and menus |
+
+**Why `keywords` matters:** citizens ask by need ("pension", "zameen", "ration card"), not by designation. A data owner who fills `keywords` improves search more than any code change does. The LLM only falls back to it when keywords miss.
+
+#### Service design
+##### `svc_directory` (id_prefix `dir`). Navigation by office level, matching the data (D12)
 **Level menu** (list):
 - `dir:lvl:district`: District officers (33)
 - `dir:lvl:subdivision`: Sub-division officers (SDO/DCLR, 6)
@@ -439,203 +697,7 @@ Typing coordinates by hand into a sheet is error-prone (swapped lat/lon, missing
 
 **Officer card:** designation, name (suffix stripped), 📞 phone, ✉ email (omitted if blank), unit, "Verified: &lt;date&gt;".
 
-## 7. Security & privacy
-- **Network:** there are no inbound ports on the office machine. The Cloudflare Tunnel exposes only `/webhook/*` and `/healthz`. The n8n editor, Postgres, and Metabase are bound to 127.0.0.1 and reached over Tailscale.
-- **Secrets:** kept in `.env` (chmod 600), never committed. Includes `N8N_ENCRYPTION_KEY`, `META_APP_SECRET`, `PHONE_HASH_SECRET`, and `PGCRYPTO_KEY`, all backed up offline.
-- **Webhook authenticity:** the HMAC signature check (E2), plus the verify-token handshake.
-- **DPDP Act 2023:**
-  - **Notice:** a one-line privacy notice on first contact.
-  - **Minimisation:** analytics use the hash only; the raw number is encrypted at rest.
-  - **Retention:** 180 days, enforced by the nightly purge.
-  - **LLM:** receives message text only.
-  - **Location:** citizen coordinates are processed in memory and never stored or logged; only distance buckets are logged. Admin captures store the site's coordinates, not the person's.
-- **Ethics:** the bot never asks for Aadhaar or other identity numbers.
-
-## 8. Operations
-- **Deploy:** `git pull && scripts/n8n_import.sh && psql -f sql/*.sql`. Credentials are created once per environment and documented.
-- **Backups:**
-  - nightly `pg_dump` of both DBs, 14-day local rotation plus an off-box copy
-  - weekly copy of the env files and encryption keys to secure storage
-  - one restore drill before go-live
-- **Monitoring:**
-  - an external uptime check on `/healthz` every 5 min
-  - the Error Trigger → `admin_alert`
-  - a sync-staleness check: no OK sync in 1h → alert
-  - the daily report includes error count and p95 latency
-- **`docs/runbook.md`:** covers restart, token rotation, "wrong number published" hotfix (edit sheet → sync or force-run), disabling a service, disabling the LLM, and rollback (re-import the previous git tag).
-
-## 9. Testing strategy
-| Layer | Tool | What it covers |
-|---|---|---|
-| SQL | `tests/sql/*.sql` via `psql` + `pgTAP`-style asserts | `begin_turn` (dedupe, rate limit), `current_shift`/`on_duty` shift boundaries, `nearest()` (known points with hand-computed distances, inactive/unverified/no-coordinate sites excluded, sheet value overrides capture), `replace_*` atomicity (sync leaves `place_coords` intact), directory fuzzy block match |
-| Templates | `tests/check_templates.py` | WhatsApp field limits in hi and en, and no missing translations |
-| Flow | `tests/run_flow_tests.py` + `tests/payloads/*.json` + `tests/services/<key>/*.yaml` | Real-shaped Meta payloads are sent to the staging webhook (mocks on). Asserts on captured outbound payloads, `message_log`, and `sessions` |
-| Contract | same runner via `99-test-harness` | Output schema of every service for its standard inputs |
-| LLM routing | `tests/llm/free_text.yaml` (50 hi/Hinglish/en lines, labelled) | Run against the real API; ≥90% correct service/subtype |
-| Load | `tests/k6/load.js` | 30 msg/s for 10 min against mocks: p95 <3s, 0 lost, 0 duplicates |
-| UAT | `docs/uat-mX.md` | Real phones, every path, both languages |
-
-**CI:** GitHub Actions `ci.yml` runs on every push:
-1. Starts compose in `ENV=test` with the mocks.
-2. Applies the SQL.
-3. Imports the workflows.
-4. Runs the SQL tests, template checks, and flow and contract tests.
-
-The LLM-routing and load tests are run manually at their gates.
-
----
-
-## 10. Milestones, tasks and estimates
-Effort is in developer-days for 1 developer, plus a part-time data/ops owner on the client side.
-
-### Week-1 prerequisites (client side; these block go-live)
-- [x] WhatsApp number live and verified
-- [ ] Meta: share the permanent System User token, Phone Number ID, **App Secret** (for signature checks); submit the `admin_alert` utility template; keep a separate **Meta test number for staging**
-- [ ] Office machine meeting §2.2 (dedicated, Ubuntu-ready), UPS, 4G failover
-- [ ] A (sub)domain with its DNS on Cloudflare (free account); IT confirms outbound HTTPS to Cloudflare, Meta, Anthropic and Google is allowed
-- [ ] Off-site backup target (a Google Drive folder or similar)
-- [ ] Written approval for the hosted LLM (otherwise go live with `LLM_ENABLED=false`)
-- [ ] Google service account; Mela and Directory sheets created and shared
-- [ ] Named data owners for the Mela sheet and the Directory sheet
-- [x] Sample data received: `Sonpur_Mela_Data.xlsx` (7 tabs) and the Directory Google Sheet (118 officers)
-- [ ] **Public control room helpline number(s)** for the Mela (D8)
-- [x] Publishing duty-staff mobiles approved (D15): file a copy of the order
-- [ ] Unicode spelling of "Nakhas" (the cell uses Kruti Dev encoding, D2); corrected numbers for D3/D4; confirm the D7 duplicates
-- [ ] **Block-level officer lists for all 20 blocks** (BDO/CO plus the other posts: MOIC, BEO, CDPO, BAO, MO Supply, JE, and so on), in the template format or any Excel
-- [ ] **Mela centre point and radius** (e.g. the Harihar Nath temple gate, 5 km) for the "outside the Mela area" check
-- [ ] **Field staff (1–2 people, about 1 day) in the Mela set-up week** to pin every thana, health centre, vet camp, parking area and ghat with the admin tool (§6.1b); their numbers are added to `ADMIN_WA_NUMBERS`
-- [ ] Service account given **Editor** access to the Mela sheet (for coordinate write-back)
-- [ ] Optional: accommodation list, do's & don'ts, Hindi names
-- [ ] The 2026 programme schedule, when announced (the sample is 2025)
-
-### M0: Core platform: weeks 1–2, ~10 dev-days
-| Task | Days |
-|---|---|
-| Office machine setup: Ubuntu, Docker, systemd, Tailscale, cloudflared tunnel + access rules, UPS/boot settings | 1 |
-| Compose rewrite: pinned versions, Postgres dbs, env, fixes E4–E6; staging + prod stacks | 1 |
-| `00_core.sql`: tables, `begin_turn`/`end_turn`, views, seed services/templates | 1.5 |
-| Router `00-router`: signature check, explode, dedupe, normalize, route, dispatch, end turn | 2 |
-| `01-send`: renderer, limit validator, phone guard, retries, logging | 1 |
-| `02-llm`: classifier + kill switch; `08-error`; `03-admin-alert` | 1 |
-| `svc_template` + `svc_echo`; `99-test-harness` | 0.5 |
-| Mocks, flow runner, template checker, CI | 2 |
-| `n8n_export.sh` / `n8n_import.sh`, fixed IDs, runbook skeleton | 1 |
-
-**Gate M0:**
-- CI green.
-- Flow tests pass for: text, button, list, location, voice, status callback (no execution saved), batched webhook (both messages answered), duplicate ID (one reply), bad signature (rejected), stale button (correct), double-tap (consistent), rate limit.
-- `svc_echo` on/off changes the menu, and a 4th registry row flips the menu to a list.
-- A fresh-instance import works with credentials as the only manual step.
-- A real round-trip works on the Meta test number.
-
-### M1: Sonpur Mela: weeks 3–4.5, ~12.5 dev-days
-| Task | Days |
-|---|---|
-| `10_svc_mela.sql`: shifts, places, duty, control room, events, `current_shift`/`on_duty`, `replace_*` | 1 |
-| Template workbooks (dropdowns, text phone columns, README) + `scripts/convert_samples.py` (print layout → template: expand merged cells, split multi-phone cells, detect Kruti Dev text, flag bad phones) + conversion report + data-entry guide | 2 |
-| `sync_mela` with validation (D2–D7, D11) and alerts/digest | 1.5 |
-| `svc_mela` workflow: data-driven menu, today/schedule, control room on-duty, category cards with current shift, all-shifts roster, place-name lookup, ask (Q&A mode) | 3 |
-| Fixtures (built from the real 2025 sample, re-dated) + SQL shift tests + 30-line LLM set | 1.5 |
-| **📍 Near me (§6.1a):** `nearest()` SQL, location request/receive, radius check, landmark fallback, directions link + map pin, card buttons; core send support for `location` / `location_request` messages | 2 |
-| **Admin coordinate capture (§6.1b):** `core.admins`, `mela:adm:*` flow, `place_coords`, sheet write-back, `pin status`, digest line | 1 |
-| UAT on staging with the data owner (including a walk test at 3 real points with the admin tool and near-me) | 0.5 |
-
-**Gate M1:**
-- All fixtures pass in hi and en.
-- Shift tests pass: 05:59/06:00, 13:59/14:00, 21:59/22:00, and 02:00 (Shift-3 across midnight). Merged-cell desks show on every shift.
-- The converter reproduces every source row: 5 health centres × 3 shifts, 14 thanas × 3, 11 vet camps, 18 parking, 6 ghats, 14 events, and 5 control desks.
-- The converter report flags D2, D3, D4 and D7 items, and none of them reaches citizens.
-- A broken sheet leaves the data unchanged and raises one alert.
-- LLM routing ≥90%, with 0 invented numbers; the 30-line set includes 8 "near me" phrasings in Hindi, Hinglish and English.
-- Near me: for 10 test origins, the returned top-1 matches a hand-checked nearest site. Directions links open walking navigation to the right point on Android and iPhone. Origins outside the radius, no-coordinate categories, and the landmark fallback behave as §6.1a says.
-- Admin capture: a non-admin gets "not allowed" for `mela:adm:*`; a capture survives the next 10-min sync; a sheet-typed value overrides it.
-- No citizen latitude/longitude appears in `message_log`, the n8n execution data, or the DB (grep check).
-- The data owner signs off that the staging answers match the sheet.
-
-### M2: Directory + go-live: weeks 5–6, ~8 dev-days
-| Task | Days |
-|---|---|
-| `20_svc_directory.sql` + `blocks` aliases; convert the 5 stacked sections → `officers` (118 rows, sub-division from email); `sync_directory` | 1.5 |
-| `svc_directory`: level menu, block key-officers card + all-posts pagination, district/sub-division/police lists, trigram search, LLM need→designation mapping, card | 3 |
-| Fixtures; confirm no core feature change | 1 |
-| k6 load test (+ queue mode only if it fails) | 1 |
-| Backups off-site + **restore-to-cloud drill** (§2.3), UptimeRobot, power-cut/ISP-failover test, runbook complete | 1.5 |
-| Prod stack + production number cut-over, UAT with about 20 staff phones, Hindi copy review | 1 |
-
-**Gate M2:**
-- Directory fixtures pass, with no core feature change.
-- 30 real-style queries resolve to the right officer in ≥90% of cases, e.g. "BDO Dighwara", "Sonpur CO", "ration card complaint", "DM number", "Derni thana".
-- Load test meets the targets.
-- The restore-to-cloud drill completes in under 1 hour.
-- Pulling the power cable and the primary internet cable: the bot recovers without anyone touching it.
-- UAT sign-off.
-- **Go-live around 10 Nov**, with the prod webhook switched to the production number.
-
-### M3: Analytics & feedback: weeks 7–8 (during the Mela), ~5 dev-days
-| Task | Days |
-|---|---|
-| Metabase container + read-only DB user on views | 1 |
-| Dashboards: daily users/messages, per service/subtype, top free-text themes, 👎 rate, unanswered list, peak hours, LLM tokens/cost | 2 |
-| `85-daily-report` at 08:00 IST via `admin_alert` + email; `09-purge` job | 1.5 |
-| Weekly `unanswered` review → keyword/menu/data fixes | 0.5 (+ ongoing) |
-
-**Gate M3:**
-- A sampled day reconciles with `message_log`.
-- The purge is verified on a copy.
-- No raw numbers are visible anywhere in Metabase.
-
-**Phase 1 total:** about 37.5 developer-days. The go-live path (M0–M2) is about 32.5 days (≈6.5 weeks), which leaves **only 2–3 days of buffer** before ~10 Nov.
-
-**Slip rule:** if M1 runs late, 📍 Near me and admin capture are the first items to move. They can ship during the first Mela week without affecting anything else, because the feature stays switched off until coordinates exist anyway. Coordinates are captured in the set-up week, so the feature realistically goes live **when the camps are up (around 17–23 Nov)** whichever way the schedule falls.
-
----
-
-## 11. Risk register
-| Risk | Likelihood | Impact | Mitigation |
-|---|---|---|---|
-| `admin_alert` template not approved | Low | No WhatsApp staff alerts | Email/SMS alerts as backup |
-| LLM approval refused | Medium | Weaker free-text handling | `LLM_ENABLED=false` still covers every service via menus |
-| **Office machine / power / internet outage during the Mela** | **Medium–High** | Bot silent | §2.2 hardening, UptimeRobot SMS alerts, 1-hour cloud move (§2.3), rehearsed |
-| Office IT blocks Cloudflare/Anthropic egress | Medium | Can't go live on-prem | Confirm in week 1; fallback to the Caddy + static IP profile, or the cloud VPS |
-| Mela data not verified in time | **High** | Wrong numbers published | Named owner, `verified` column, prod rejects unverified rows, sign-off in the M1 gate |
-| Officer transfers make the directory stale | High | Wrong contact | `last_verified` shown on every card; monthly verification reminder to the owner |
-| Traffic spike during the Mela | Low–Medium | Slow replies | Load test on the actual office machine; queue-mode profile ready |
-| Site coordinates not captured, or captured wrongly | Medium | Near me unavailable, or it points to the wrong spot | Admin tool with map-pin confirmation; `pin status` in the daily digest; the feature hides categories without coordinates; a sheet value can correct any point |
-| Citizens' GPS inaccurate in dense crowds | Medium | "Nearest" off by 100–200 m | Show the top 3 with "approx." distances; the walking link recalculates live in Maps |
-| Citizens send voice notes | High | Unanswered | Friendly redirect to the menu; log volume; voice-to-text as a future service |
-| n8n upgrade breaks nodes | Low | Outage | Pinned versions; upgrade only through staging + CI |
-
-## 12. Running cost estimate (Mela month) [Guessing: volumes are assumptions]
-- **Hosting:** office machine (existing or about ₹60–80k one-time if bought), UPS, and a 4G backup plan at about ₹300–500/month. Cloudflare Tunnel is free. The domain costs about ₹800/year.
-- **WhatsApp:** [Likely] free for replies to citizen-initiated chats (the service window). Utility templates for admin alerts cost a few paise to about ₹0.15 each.
-- **Claude Haiku 4.5** ($1 input / $5 output per MTok):
-  - Assume 50k free-text calls × ~1.5k input + 200 output tokens.
-  - That gives ≈ $75 input + $50 output, about **$125 (≈₹10.5k)** for the whole Mela.
-  - Button taps cost nothing because they never call the LLM.
-
-## 13. Immediate next steps
-1. **District / client side:** close the week-1 prerequisites in §10. The ones that most affect the schedule are:
-   - the office machine and the Cloudflare domain
-   - the Meta App Secret and a test number
-   - the public control room number
-   - the block-level officer lists
-2. **Development:** start M0 (core platform) on the staging stack as soon as the office machine is available. Until then, development runs on a laptop with the same Docker setup.
-3. **Data owners:** receive the template workbooks and the data-entry guide in M1, and start moving the 2026 duty orders into them as soon as the orders are issued.
-
----
-
-## 14. Later phases (out of Phase 1 scope)
-
-### How any new service plugs in (no router change)
-1. Copy `svc_template` and give it a new fixed workflow ID.
-2. Add a new `svc_<key>` DB schema.
-3. Write fixtures and pass the contract test.
-4. Insert one `core.services` row and its templates.
-5. Enable it on staging, run UAT, then enable it on prod.
-
-The main menu grows automatically. In Phase 1 it shows **2 reply buttons**; with more than 3 services it switches to a list.
-
-### Scheme Eligibility (next phase): notes kept for later
+### Scheme Eligibility (after the Directory): notes kept for later
 - **Data source:** structured MySQL columns, exposed through a read-only view and synced nightly into its own `svc_schemes` schema.
 - **Verdict:** decided by a deterministic SQL function, never by the LLM.
 - **Flow:** about six button/list questions, each with a skip option.
