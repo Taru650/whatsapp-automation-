@@ -39,7 +39,7 @@ ON CONFLICT (key) DO UPDATE SET hi = EXCLUDED.hi, en = EXCLUDED.en, max_len = EX
 INSERT INTO core.services (service_key, id_prefix, title_hi, title_en, description_hi, description_en,
                            menu_order, enabled, workflow_id, intent_hint_en, intent_hint_hi, subtypes, keywords)
 VALUES ('echo', 'echo', 'इको टेस्ट', 'Echo test', 'परीक्षण सेवा', 'Test service',
-        999, true, 'SvcEcho000000001',
+        999, false, 'SvcEcho000000001',   -- test-only; enable per test (never in production)
         'Test service: the user explicitly asks to test or echo something.',
         'परीक्षण सेवा', '{"repeat": "repeat the user text back"}', ARRAY['echo', 'test'])
 ON CONFLICT (service_key) DO UPDATE SET

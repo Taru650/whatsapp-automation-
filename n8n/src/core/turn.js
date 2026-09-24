@@ -93,7 +93,7 @@ function decideTurn(item, turn, flags) {
     case 'not_allowed':
       return menuOrOpen(env, [{ type: 'text', body: t(env, 'not_allowed') }]);
     case 'service':
-      return { action: 'service', env, service: route.service, pre: [], input: env.input, via };
+      return { action: 'service', env, service: route.service, pre: [], input: env.input, via: route.via || via };
     case 'llm':
       return { action: 'llm', env };
     case 'menu':

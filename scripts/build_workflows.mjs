@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 import * as core from '../n8n/src/workflows/core.mjs';
 import * as services from '../n8n/src/workflows/services.mjs';
 
@@ -19,13 +20,31 @@ const targets = {
   'core/core-99-test-harness.json': core.harness,
   'services/svc-echo.json': services.echo,
   'services/svc-template.json': services.template,
+  'services/svc-mela.json': services.mela,
+  'services/sync-mela.json': services.syncMela,
 };
+
+// Compile every Code node the way n8n runs it (the body of an async function).
+// Catches syntax errors and clashing top-level names between inlined modules
+// at build time instead of at the first citizen's message.
+function compileCheck(rel, wf) {
+  for (const n of wf.nodes.filter((x) => x.type === 'n8n-nodes-base.code')) {
+    try {
+      new vm.Script(`(async function () {\n${n.parameters.jsCode}\n})`, { filename: `${rel}#${n.name}` });
+    } catch (e) {
+      console.error(`${rel} / node "${n.name}": ${e.message}`);
+      process.exitCode = 1;
+    }
+  }
+}
 
 const check = process.argv.includes('--check');
 let stale = 0;
 for (const [rel, build] of Object.entries(targets)) {
   const file = path.join(OUT, rel);
-  const json = JSON.stringify(build().toJSON(), null, 2) + '\n';
+  const wf = build().toJSON();
+  compileCheck(rel, wf);
+  const json = JSON.stringify(wf, null, 2) + '\n';
   if (check) {
     const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
     if (current !== json) { console.error(`stale: n8n/workflows/${rel}`); stale++; }

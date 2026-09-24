@@ -19,6 +19,21 @@ function prefixOf(value, sep) {
   return i > 0 ? value.slice(0, i) : null;
 }
 
+// Service whose registry keyword appears in the text (Latin: whole word;
+// Devanagari: substring, since Hindi words take suffixes). Lower menu_order wins.
+function keywordService(services, text) {
+  const t = ` ${String(text || '').toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ')} `;
+  const sorted = (services || []).slice().sort((a, b) => (a.menu_order || 0) - (b.menu_order || 0));
+  for (const s of sorted) {
+    for (const k of s.keywords || []) {
+      const kw = String(k).toLowerCase().trim();
+      if (!kw) continue;
+      if (/[\u0900-\u097F]/.test(kw) ? t.includes(kw) : t.includes(` ${kw} `)) return s;
+    }
+  }
+  return null;
+}
+
 function decideRoute({ input, state, services, isAdmin, llmEnabled }) {
   const svcByPrefix = new Map((services || []).map((s) => [s.id_prefix, s]));
 
@@ -57,9 +72,11 @@ function decideRoute({ input, state, services, isAdmin, llmEnabled }) {
   if (stateOwner) return { action: 'service', service: stateOwner };
 
   if (input.kind === 'text' && input.text) {
+    const byKeyword = keywordService(services, input.text);
+    if (byKeyword) return { action: 'service', service: byKeyword, via: 'keyword' };
     return llmEnabled ? { action: 'llm' } : { action: 'menu', reason: 'no_llm' };
   }
   return { action: 'menu' };
 }
 
-if (typeof module !== 'undefined') module.exports = { decideRoute, GLOBAL_COMMANDS, normText };
+if (typeof module !== 'undefined') module.exports = { decideRoute, keywordService, GLOBAL_COMMANDS, normText };

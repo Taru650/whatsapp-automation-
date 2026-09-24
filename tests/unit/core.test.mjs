@@ -93,6 +93,12 @@ test('route: precedence', () => {
   assert.equal(route({ kind: 'text', text: 'Kali Ghat' }, { state: 'dir.search' }).service.service_key, 'dir');
   // location: state owner only if it accepts location, else the location handler
   assert.equal(route({ kind: 'location', lat: 1, lon: 2 }, { state: 'dir.search' }).service.service_key, 'mela');
+  // free text: a registry keyword routes without the LLM
+  const kw = [svc('mela', 1, { keywords: ['police', 'पुलिस'] }), svc('dir', 2, { keywords: ['bdo'] })];
+  assert.equal(decideRoute({ input: { kind: 'text', text: 'Police station kahan hai?' }, services: kw, llmEnabled: true }).service.service_key, 'mela');
+  assert.equal(decideRoute({ input: { kind: 'text', text: 'पुलिसवाले कहाँ हैं' }, services: kw, llmEnabled: true }).service.service_key, 'mela');
+  assert.equal(decideRoute({ input: { kind: 'text', text: 'BDO Dighwara' }, services: kw, llmEnabled: true }).service.service_key, 'dir');
+  assert.equal(decideRoute({ input: { kind: 'text', text: 'policeman' }, services: kw, llmEnabled: true }).action, 'llm', 'Latin keywords match whole words only');
   // free text: LLM when enabled, menu when not
   assert.equal(route({ kind: 'text', text: 'police near me' }).action, 'llm');
   assert.equal(route({ kind: 'text', text: 'police near me' }, { llmEnabled: false }).action, 'menu');
@@ -158,6 +164,8 @@ test('phone guard: finds phones, ignores dates/times/short numbers', () => {
   assert.deepEqual(extractPhones(''), []);
   assert.deepEqual(extractPhones('https://www.google.com/maps/dir/?api=1&destination=25.678912,85.123456&travelmode=walking'), []);
   assert.deepEqual(extractPhones('https://wa.me/919431012345'), ['919431012345']);
+  // regression: a number at the end of a line must not fuse with the next list number
+  assert.deepEqual(extractPhones('👤 Ajay – 📞 6201113074\n\n7. *Bajrang Chowk*\n👤 X – 📞 9471451376'), ['6201113074', '9471451376']);
 });
 
 // --- contract --------------------------------------------------------------
