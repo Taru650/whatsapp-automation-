@@ -17,6 +17,8 @@ export const IDS = {
   harness: 'CoreHarness00001',
   echo: 'SvcEcho000000001',
   template: 'SvcTemplate00001',
+  mela: 'SvcMela000000001',
+  syncMela: 'SyncMela00000001',
 };
 
 // Source of a module from n8n/src, with the CommonJS export line removed.

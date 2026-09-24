@@ -155,9 +155,9 @@ def hash_of(wa_id):
 
 
 def reset_state():
-    sql("truncate core.message_log, core.feedback, core.unanswered, core.sessions, core.citizens")
-    sql("delete from core.services where service_key <> 'echo'")
-    sql("update core.services set enabled = true where service_key = 'echo'")
+    sql("truncate core.message_log, core.feedback, core.unanswered, core.sessions, core.citizens, core.sync_runs")
+    sql("delete from core.services where service_key not in ('echo', 'mela')")
+    enable_only("echo")
     sql("update core.settings set value = 'true' where key = 'llm_enabled'")
     reset_mocks()
 
@@ -171,9 +171,18 @@ def user():
 TESTS = []
 
 
-def scenario(fn):
-    TESTS.append(fn)
-    return fn
+def enable_only(*keys):
+    names = ",".join(f"'{k}'" for k in keys)
+    sql(f"update core.services set enabled = (service_key in ({names})) where service_key in ('echo', 'mela')")
+
+
+def scenario(fn=None, services=("echo",)):
+    """Register a scenario; `services` are the registry rows enabled while it runs."""
+    def wrap(f):
+        f.services = services
+        TESTS.append(f)
+        return f
+    return wrap(fn) if fn else wrap
 
 
 @scenario
@@ -357,9 +366,9 @@ def registry_drives_the_menu():
 @scenario
 def llm_routes_free_text_and_misses_gracefully():
     u = user()
-    send(u, m_text(u, "please echo this back"))
+    send(u, m_text(u, "please repeat after me"))   # no registry keyword -> goes to the LLM
     out = wait_out(u, 3)
-    assert body_of(out[1]) == "You said: please echo this back", [summary(c) for c in out]
+    assert body_of(out[1]) == "You said: please repeat after me", [summary(c) for c in out]
     req = json.loads(http("GET", f"{CLAUDE}/__captured")[1])[-1]
     assert req["body"]["model"] == "claude-haiku-4-5" and req["headers"]["anthropic-version"] == "2023-06-01"
     assert scalar(f"select via from core.message_log where wa_hash='{hash_of(u)}' and direction='in' order by id desc limit 1") == "llm"
@@ -380,7 +389,7 @@ def llm_kill_switch():
     try:
         http("POST", f"{CLAUDE}/__reset", {})
         u = user()
-        send(u, m_text(u, "please echo this back"))
+        send(u, m_text(u, "please repeat after me"))
         out = wait_out(u, 2)
         assert ids_of(out[1]) == ["echo:again", "core:menu"], "LLM off: straight to the menu"
         assert json.loads(http("GET", f"{CLAUDE}/__captured")[1]) == [], "no LLM call when disabled"
@@ -473,6 +482,214 @@ def test_harness_calls_a_service_directly():
     assert out["messages"][0]["body"] == "आपने लिखा: नमस्ते" and out["next_state"] == "echo.wait", out
 
 
+# ---------------------------------------------------------------- M1: Sonpur Mela ---
+SHEETS = os.environ.get("SHEETS_MOCK_URL", "http://127.0.0.1:8083")
+FIXTURE = json.loads((__import__("pathlib").Path(__file__).parent / "fixtures" / "mela_sheet.json").read_text(encoding="utf-8"))
+MELA_ONLY = ("mela",)
+
+
+def ist_today():
+    return time.strftime("%Y-%m-%d", time.gmtime(time.time() + 5.5 * 3600))
+
+
+def clean_sheet(redate=True):
+    """The converted 2025 sample, fixed the way the data owner would (plan D3/D8), events re-dated to today."""
+    t = json.loads(json.dumps(FIXTURE))
+    cols = t["places"][0]
+    for row in t["places"]:
+        if row[cols.index("s2_phone")] == "709095094":
+            row[cols.index("s2_phone")] = "7090950940"
+    settings = {r[0]: r for r in t["settings"][1:]}
+    settings["public_helpline_1"][1] = "06158-221084"
+    settings["mela_center_lat"][1], settings["mela_center_lon"][1] = "25.6920", "85.1750"
+    if redate:
+        base = time.mktime(time.strptime(ist_today(), "%Y-%m-%d"))
+        for i, row in enumerate(t["events"][1:]):
+            row[1] = time.strftime("%Y-%m-%d", time.localtime(base + i * 86400 + 3600))
+    return t
+
+
+def run_sync(tabs):
+    http("POST", f"{SHEETS}/__set", {"tabs": tabs})
+    s, b = http("POST", f"{N8N}/webhook/test/service", {"workflow_id": "SyncMela00000001", "input": {}})
+    assert s == 200, (s, b)
+    return json.loads(b)
+
+
+def admin_send(*messages):
+    send(ADMIN, *messages)
+
+
+@scenario(services=MELA_ONLY)
+def mela_sync_rejects_bad_sheet_and_alerts_once():
+    sql("select svc_mela.replace_all('{}'::jsonb)")
+    n0 = len(out_to(ADMIN))
+    r = run_sync(FIXTURE)  # the raw sample: row 14 has a 9-digit phone
+    assert r["status"] == "rejected" and any("709095094" in e["msg"] for e in r["errors"]), r
+    assert scalar("select count(*) from svc_mela.places") == "0", "nothing loaded from a rejected sheet"
+    end = time.time() + 15
+    while time.time() < end and len(out_to(ADMIN)) == n0:
+        time.sleep(0.5)
+    alert = out_to(ADMIN)[-1]["payload"]["template"]["components"][0]["parameters"][0]["text"]
+    assert "row 14" in alert and "709095094" in alert, alert
+    run_sync(FIXTURE)
+    wait_quiet(3)
+    assert len(out_to(ADMIN)) == n0 + 1, "same failure is not re-alerted within the hour"
+
+
+@scenario(services=MELA_ONLY)
+def mela_sync_loads_clean_sheet_and_keeps_it_when_next_one_breaks():
+    r = run_sync(clean_sheet())
+    assert r["status"] == "ok", r["errors"]
+    assert r["counts"] == {"places": 54, "duty": 68, "control": 11, "events": 14, "guidelines": 0}, r["counts"]
+    assert scalar("select count(*) from svc_mela.places") == "54"
+    broken = clean_sheet()
+    broken["places"][1][broken["places"][0].index("s1_phone")] = "12345"
+    assert run_sync(broken)["status"] == "rejected"
+    assert scalar("select count(*) from svc_mela.places") == "54", "last good data stays live"
+    http("POST", f"{SHEETS}/__fail", {"status": 500})
+    try:
+        r = run_sync(clean_sheet())
+        assert r["status"] == "error" and "could not read" in r["errors"][0]["msg"], r
+    finally:
+        http("POST", f"{SHEETS}/__fail", {"status": 0})
+    assert run_sync(clean_sheet())["status"] == "ok"
+
+
+@scenario(services=MELA_ONLY)
+def mela_hi_opens_mela_menu_directly():
+    run_sync(clean_sheet())
+    u = user()
+    send(u, m_text(u, "hi"))
+    out = wait_out(u, 2)
+    assert out[1]["payload"]["interactive"]["type"] == "list"
+    ids = ids_of(out[1])
+    assert ids[:2] == ["mela:today", "mela:control"] and "mela:cat:thana" in ids and ids[-1] == "mela:ask", ids
+    assert len(ids) <= 10
+
+
+def find_body(out, *needles):
+    """Body of the first outbound message containing any of the needles."""
+    for c in out:
+        if any(n in body_of(c) for n in needles):
+            return body_of(c)
+    raise AssertionError(f"no message contains {needles}: {[summary(c) for c in out]}")
+
+
+@scenario(services=MELA_ONLY)
+def mela_cards_today_control_thana():
+    run_sync(clean_sheet())
+    u = user()
+    send(u, m_list(u, "mela:today", "Today"))
+    out = wait_out(u, 2)
+    assert "Altamas Faridi" in find_body(out, "Programme", "कार्यक्रम")
+    n = len(out)
+    send(u, m_list(u, "mela:control", "Control"))
+    out = wait_out(u, n + 2)
+    assert "06158-221084" in find_body(out[n:], "control room", "कंट्रोल रूम")
+    n = len(out)
+    send(u, m_list(u, "mela:cat:thana", "Police"))
+    out = wait_out(u, n + 2)
+    card = find_body(out[n:], "Nakash Thana")
+    assert "on duty now" in card or "अभी ड्यूटी पर" in card, card[:300]
+    assert "not available right now" not in json.dumps([c["payload"] for c in out]), "phone guard must allow synced numbers"
+    assert scalar(f"select count(*) from core.message_log where wa_hash='{hash_of(u)}' and error is not null") == "0"
+
+
+@scenario(services=MELA_ONLY)
+def mela_keywords_route_without_llm():
+    run_sync(clean_sheet())
+    http("POST", f"{CLAUDE}/__reset", {})
+    u = user()
+    send(u, m_text(u, "police"))
+    out = wait_out(u, 3)
+    assert "Nakash Thana" in body_of(out[1]), summary(out[1])
+    v = user()
+    send(v, m_text(v, "पुलिस कहाँ है"))
+    out = wait_out(v, 2)
+    assert out[1]["payload"]["type"] == "interactive" and out[1]["payload"]["interactive"]["type"] == "location_request_message" \
+        or "थाना" in body_of(out[1]), summary(out[1])
+    assert json.loads(http("GET", f"{CLAUDE}/__captured")[1]) == [], "keyword routing needs no LLM call"
+
+
+@scenario(services=MELA_ONLY)
+def mela_admin_pins_site_then_citizen_finds_nearest():
+    run_sync(clean_sheet())
+    sql("delete from svc_mela.place_coords")
+    admin_send(m_text(ADMIN, "pin"))
+    out = wait_out(ADMIN, 2)
+    assert ids_of(out[-1])[0] == "mela:adm:cat:thana:0", summary(out[-1])
+    n = len(out_to(ADMIN))
+    admin_send(m_list(ADMIN, "mela:adm:place:TH03", "Theater Thana"))
+    out = wait_out(ADMIN, n + 1)
+    assert out[-1]["payload"]["interactive"]["type"] == "location_request_message"
+    admin_send(m_location(ADMIN, 25.6922, 85.1752))
+    out = wait_out(ADMIN, n + 3)
+    assert out[-2]["payload"]["type"] == "location"
+    admin_send(m_button(ADMIN, "mela:adm:save", "Save"))
+    wait_out(ADMIN, n + 4)
+    assert sql("select place_id, lat, lon from svc_mela.place_coords") == [["TH03", "25.6922", "85.1752"]]
+
+    u = user()
+    send(u, m_list(u, "mela:near:thana", "Nearest police"))
+    out = wait_out(u, 2)
+    assert out[1]["payload"]["interactive"]["type"] == "location_request_message"
+    send(u, m_location(u, 25.6921, 85.1751))
+    out = wait_out(u, 5)
+    card = body_of(out[2])
+    assert "Theater Thana" in card and "destination=25.6922,85.1752&travelmode=walking" in card, card
+    assert out[3]["payload"]["type"] == "location"
+    h = hash_of(u)
+    assert "25.6921" not in json.dumps(sql(f"select text, state from core.message_log where wa_hash='{h}'")), "citizen location never stored"
+    assert "25.6921" not in json.dumps(sql(f"select context from core.sessions where wa_hash='{h}'"))
+
+
+@scenario(services=MELA_ONLY)
+def mela_non_admin_cannot_use_admin_tools():
+    run_sync(clean_sheet())
+    u = user()
+    send(u, m_list(u, "mela:adm:place:TH01", "x"))
+    out = wait_out(u, 3)
+    assert "not available to you" in body_of(out[1]) or "उपलब्ध नहीं" in body_of(out[1]), summary(out[1])
+
+
+@scenario(services=MELA_ONLY)
+def mela_question_answered_from_approved_text():
+    run_sync(clean_sheet())
+    u = user()
+    send(u, m_list(u, "mela:ask", "Ask"))
+    wait_out(u, 2)
+    send(u, m_text(u, "Where is the mela held?"))
+    out = wait_out(u, 4)
+    assert "Harihar Kshetra" in body_of(out[2]), summary(out[2])
+    req = json.loads(http("GET", f"{CLAUDE}/__captured")[1])[-1]["body"]
+    assert "Harihar Kshetra" in req["system"] and "answerable" in json.dumps(req["output_config"]), "answers only from the loaded text"
+    send(u, m_list(u, "mela:ask", "Ask"))
+    wait_out(u, 5)
+    send(u, m_text(u, "unknownq what is the ticket price?"))
+    out = wait_out(u, 6)
+    assert "06158-221084" in body_of(out[5]), "unknown -> helpline, never a guess: " + body_of(out[5])
+
+
+@scenario(services=MELA_ONLY)
+def mela_hindi_citizen_gets_hindi():
+    run_sync(clean_sheet())
+    u = user()
+    send(u, m_text(u, "नमस्ते"))
+    out = wait_out(u, 2)
+    assert "सोनपुर मेला" in body_of(out[1]), summary(out[1])
+    send(u, m_list(u, "mela:cat:health_centre", "Health"))
+    out = wait_out(u, 4)
+    card = find_body(out[2:], "स्वास्थ्य केंद्र")
+    assert "Hariharnath Mandir" in card and "📞" in card, card[:200]
+
+
+@scenario(services=MELA_ONLY)
+def mela_no_payload_rejected_by_meta_limits():
+    bad = [c for c in captured() if c["errors"]]
+    assert not bad, bad[:2]
+
+
 # ---------------------------------------------------------------- runner ---
 def main():
     ap = argparse.ArgumentParser()
@@ -485,6 +702,7 @@ def main():
             continue
         t0 = time.time()
         try:
+            enable_only(*fn.services)
             fn()
             print(f"PASS  {fn.__name__}  ({time.time() - t0:.1f}s)")
         except Exception as e:  # noqa: BLE001 - report every failure and continue

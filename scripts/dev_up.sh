@@ -16,7 +16,7 @@ mkdir -p "$RUN"
 N8N_VERSION=$(node -p "require('./package.json').config.n8nVersion")
 
 stop() {
-  for p in n8n graph anthropic; do
+  for p in n8n graph anthropic sheets; do
     [[ -f "$RUN/$p.pid" ]] && kill "$(cat "$RUN/$p.pid")" 2>/dev/null || true
     rm -f "$RUN/$p.pid"
   done
@@ -38,6 +38,13 @@ scripts/db_migrate.sh
 
 python3 tests/mocks/graph_api.py --port 8081 & echo $! > "$RUN/graph.pid"
 python3 tests/mocks/anthropic.py --port 8082 & echo $! > "$RUN/anthropic.pid"
+python3 tests/mocks/sheets.py --port 8083 & echo $! > "$RUN/sheets.pid"
+
+# Throwaway Google service-account key for the Sheets mock (tests only).
+if [[ -z "${GOOGLE_SA_JSON:-}" && "${ENV:-}" == "test" ]]; then
+  [[ -f "$RUN/test_sa.pem" ]] || openssl genrsa -out "$RUN/test_sa.pem" 2048 2>/dev/null
+  export GOOGLE_SA_JSON=$(python3 -c "import json,sys; print(json.dumps({'type':'service_account','client_email':'bot@test.iam.gserviceaccount.com','private_key':open(sys.argv[1]).read(),'token_uri':'http://127.0.0.1:8083/token'}))" "$RUN/test_sa.pem")
+fi
 
 scripts/n8n_import.sh
 $N8N_BIN start > "$RUN/n8n.log" 2>&1 & echo $! > "$RUN/n8n.pid"

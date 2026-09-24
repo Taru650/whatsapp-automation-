@@ -39,6 +39,9 @@ jobs:
           scripts/db_migrate.sh && scripts/db_migrate.sh
           npm run test:sql
 
+      - name: Mela free-text routing (keyword path; LLM cases are skipped without a key)
+        run: python3 tests/run_mela_routing_eval.py
+
       - name: Install n8n (pinned)
         run: npm install -g "n8n@$(node -p "require('./package.json').config.n8nVersion")"
 

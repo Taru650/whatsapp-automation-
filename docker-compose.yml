@@ -53,6 +53,9 @@ x-n8n-env: &n8n-env
   PGCRYPTO_KEY: ${PGCRYPTO_KEY:?set PGCRYPTO_KEY}
   ADMIN_WA_NUMBERS: ${ADMIN_WA_NUMBERS:-}
   ADMIN_ALERT_TEMPLATE: ${ADMIN_ALERT_TEMPLATE:-admin_alert}
+  # Sonpur Mela data (Google Sheet read by the sync-mela workflow)
+  MELA_SHEET_ID: ${MELA_SHEET_ID:-}
+  GOOGLE_SA_JSON: ${GOOGLE_SA_JSON:-}
 
 services:
   postgres:

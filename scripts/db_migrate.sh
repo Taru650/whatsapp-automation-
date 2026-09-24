@@ -17,3 +17,11 @@ if [[ -n "${ADMIN_WA_NUMBERS:-}" && -n "${PHONE_HASH_SECRET:-}" ]]; then
   echo "admins updated"
 fi
 
+# Approved general-information text for Mela Q&A answers.
+if [[ -f data/history.md ]]; then
+  echo "insert into svc_mela.qa_context (id, content) values (1, :'content')
+        on conflict (id) do update set content = excluded.content;" \
+    | psql ${DATABASE_URL:+"$DATABASE_URL"} -X -q -v ON_ERROR_STOP=1 -o /dev/null -v content="$(cat data/history.md)"
+  echo "mela Q&A context loaded"
+fi
+

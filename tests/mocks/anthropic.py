@@ -3,10 +3,12 @@
 
 Returns a structured-output classification chosen by keywords in the user
 message:
-  contains "echo"    -> {"service_key": "echo", "subtype": "repeat", confidence 0.93}
+  contains "echo"/"repeat" -> {"service_key": "echo", "subtype": "repeat", confidence 0.93}
   contains "unsure"  -> {"service_key": "echo", ..., confidence 0.3}  (below threshold)
   contains "fail500" -> HTTP 500
   otherwise          -> {"service_key": "none"}
+Mela Q&A requests (schema with "answerable") get a fixed answer, or
+answerable=false when the question contains "unknownq".
 GET /__captured lists received requests; POST /__reset clears them.
 """
 import argparse
@@ -21,7 +23,7 @@ EMPTY_SLOTS = {"place": "", "category": "", "date": "", "block": "", "department
 
 def classify(text):
     t = text.lower()
-    if "echo" in t:
+    if "echo" in t or "repeat" in t:
         return {"service_key": "echo", "subtype": "repeat", "slots": EMPTY_SLOTS, "lang": "en", "confidence": 0.93}
     if "unsure" in t:
         return {"service_key": "echo", "subtype": "repeat", "slots": EMPTY_SLOTS, "lang": "en", "confidence": 0.3}
@@ -62,7 +64,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, {"type": "error", "error": {"type": "api_error", "message": "mock failure"}})
         if req.get("output_config", {}).get("format", {}).get("type") != "json_schema":
             return self._send(400, {"type": "error", "error": {"type": "invalid_request_error", "message": "expected json_schema"}})
-        out = classify(text)
+        schema = req["output_config"]["format"].get("schema", {})
+        if "answerable" in schema.get("properties", {}):  # Mela Q&A over the approved text
+            known = "unknownq" not in text.lower()
+            out = {"answerable": known, "answer": "Sonpur Mela is held at Harihar Kshetra, where the Ganga and Gandak meet." if known else ""}
+        else:
+            out = classify(text)
         self._send(200, {
             "id": "msg_mock", "type": "message", "role": "assistant", "model": req.get("model"),
             "content": [{"type": "text", "text": json.dumps(out)}],
