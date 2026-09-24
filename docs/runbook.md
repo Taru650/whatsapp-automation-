@@ -34,6 +34,26 @@ All commands run from the repository root on the host. `dc` = `docker compose`
 3. `dc exec postgres psql -U bot citizen_bot -c "select direction, kind, service_key, state, error from core.message_log order by id desc limit 20"`.
    Expect no `error` values.
 
+## Sonpur Mela service (M1)
+1. **Sheet:** open `data/templates/Sonpur_Mela_Bot_Data.xlsx` in Google Sheets
+   (Drive → Upload → Open with Google Sheets). Put its id in `MELA_SHEET_ID`.
+2. **Service account:** Google Cloud → IAM → Service accounts → create one,
+   then add a JSON key. Put the key JSON (or its base64) in `GOOGLE_SA_JSON`.
+   Share the sheet with its `client_email` as Viewer, or as Editor for
+   pin write-back.
+3. **Check before switching it on:**
+   `node scripts/validate_mela.mjs <export.json> --prod` shows exactly what the
+   sync would reject. Or just wait for the admin alert.
+4. **Switch it on** once a sync has succeeded
+   (`select status, rows, ts from core.sync_runs order by id desc limit 3`):
+   `update core.services set enabled = (service_key = 'mela') where service_key in ('mela','echo');`
+5. **Sync now** (instead of waiting 10 minutes): in the n8n editor (over
+   Tailscale) open `sync-mela` → Execute workflow.
+6. **Site pins:** see `docs/data-entry-guide.md` §7. Admin numbers come from
+   `ADMIN_WA_NUMBERS`, so re-run `migrate` after changing them.
+7. **Mela Q&A text:** edit `data/history.md` → `dc run --rm migrate`. The
+   bot only answers general questions from this text.
+
 ## Everyday operations
 | Task | Command |
 |---|---|
@@ -43,6 +63,7 @@ All commands run from the repository root on the host. `dc` = `docker compose`
 | Rotate the WhatsApp token | edit `.env` → `dc up -d n8n` |
 | Change admin numbers | edit `ADMIN_WA_NUMBERS` → `dc run --rm migrate` (stores hashes) and `dc up -d n8n` |
 | Recent errors | `... -c "select ts, service_key, error from core.message_log where error is not null order by id desc limit 20"` |
+| Mela sync history | `... -c "select ts, status, rows, errors from core.sync_runs where service_key='mela' order by id desc limit 10"` |
 | Unanswered questions | `... -c "select ts, reason, text from core.unanswered order by id desc limit 50"` |
 | Emergency UI hotfix | fix in the UI, then `scripts/n8n_export.sh`, port it to `n8n/src`, rebuild, redeploy |
 

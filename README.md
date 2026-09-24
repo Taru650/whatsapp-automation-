@@ -9,6 +9,13 @@ Eligibility plug in later without rebuilding the bot.
   ([PDF](docs/Saran-Citizen-WhatsApp-Bot-Plan.pdf))
 - Operations: [`docs/runbook.md`](docs/runbook.md)
 - New service: [`docs/adding-a-service.md`](docs/adding-a-service.md)
+- Mela data owners: [`docs/data-entry-guide.md`](docs/data-entry-guide.md)
+
+**Status:**
+- **M0 (core platform):** done.
+- **M1 (Sonpur Mela):**
+  - built: programme, control room, on-duty thana/health/vet cards, parking, ghats, 📍 near me with walking directions, admin site pinning, Q&A from approved text, Google Sheet sync with validation and alerts
+  - waiting on real district data and a real-phone check
 
 ## How it works
 
@@ -37,7 +44,9 @@ sql/                      schema + seed (idempotent, applied by scripts/db_migra
 scripts/                  build, migrate, import/export, dev_up (local stack without Docker)
 tests/                    unit, SQL, flow (end-to-end) tests; Graph + Anthropic mocks
 deploy/                   Caddyfile (path filter), DB init
-data/                     Sonpur Mela seed data (used from M1)
+data/samples/             the district's 2025 Mela workbook (input to scripts/convert_samples.py)
+data/templates/           bot-format Mela workbook to upload as the Google Sheet
+data/history.md           approved general-info text for Mela Q&A
 docker-compose.yml        office machine (Cloudflare Tunnel) or VPS (Caddy + TLS)
 ```
 
@@ -51,7 +60,8 @@ npm run check                      # generated JSON up to date + unit tests
 PGHOST=... PGUSER=... PGPASSWORD=... scripts/dev_up.sh   # migrate, mocks, import, start n8n
 set -a; source tests/test.env; set +a
 npm run test:sql                   # SQL asserts + template limits
-npm run test:flow                  # 23 end-to-end scenarios through the live n8n
+npm run test:flow                  # 33 end-to-end scenarios through the live n8n
+python3 tests/run_mela_routing_eval.py   # free-text routing accuracy (LLM part needs a real key)
 scripts/dev_up.sh stop
 ```
 

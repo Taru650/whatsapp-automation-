@@ -26,6 +26,8 @@ workflows so the change can be ported back into `src`.
 | CoreHarness00001 | core-99-test-harness | `POST /webhook/test/service` (published only when `ENV=test`) |
 | SvcEcho000000001 | svc-echo | M0 dummy service; proves the contract |
 | SvcTemplate00001 | svc-template | Starting point for new services |
+| SvcMela000000001 | svc-mela | Sonpur Mela: snapshot → handler → (LLM Q&A) → admin effects |
+| SyncMela00000001 | sync-mela | Every 10 min: Google Sheet → validate → atomic replace, or keep old data + alert |
 
 ## Findings from the n8n 2.40.5 spike (verified, not assumed)
 
@@ -51,6 +53,10 @@ workflows so the change can be ported back into `src`.
   published workflow fails, so `n8n_import.sh` unpublishes everything first.
 - **`/healthz` answers before webhooks are registered.** `dev_up.sh` waits
   for the router's webhook itself.
+- **Build-time compile check.** `build_workflows.mjs` compiles every Code
+  node the way n8n runs it (as an async function body). It caught an
+  inlined module whose helper name clashed with the node's own variable,
+  which would otherwise have failed on the first message.
 - **Successful executions** are soft-deleted immediately with
   `EXECUTIONS_DATA_SAVE_ON_SUCCESS=none` and hard-pruned later.
   `core.message_log` is the audit trail.
