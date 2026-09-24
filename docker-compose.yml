@@ -1,83 +1,160 @@
-version: "3.8"
-
-# Sonpur Mela WhatsApp bot stack:
-#   n8n      - orchestrates WhatsApp <-> retrieval <-> LLM
-#   ollama   - local LLM + embedding model (no external API calls)
-#   postgres - pgvector store for retrieved facility/history records
+# Saran Citizen WhatsApp Bot - production/staging stack.
 #
-# All three run on this one host so n8n reaches Ollama and Postgres over the
-# Docker network with no public exposure needed for either.
+#   office machine (default):  docker compose --profile tunnel up -d
+#   VPS fallback (plan §2.4):   docker compose --profile vps up -d
+#   staging next to prod:       docker compose -p bot-staging --env-file .env.staging --profile tunnel up -d
+#
+# First deploy and every update:
+#   docker compose run --rm migrate          # apply sql/*.sql (idempotent)
+#   docker compose stop n8n && docker compose run --rm import && docker compose up -d n8n
+#
+# Only Caddy is reachable from outside, and it forwards nothing but the webhook
+# paths. The n8n editor, Postgres and Metabase stay on 127.0.0.1 (reach them over Tailscale).
+
+x-n8n-env: &n8n-env
+  # n8n's own storage
+  DB_TYPE: postgresdb
+  DB_POSTGRESDB_HOST: postgres
+  DB_POSTGRESDB_DATABASE: n8n
+  DB_POSTGRESDB_USER: ${POSTGRES_USER:-bot}
+  DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+  N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?set N8N_ENCRYPTION_KEY in .env (and back it up)}
+  N8N_HOST: ${PUBLIC_HOST:-localhost}
+  N8N_PROTOCOL: https
+  WEBHOOK_URL: https://${PUBLIC_HOST:-localhost}/
+  N8N_LISTEN_ADDRESS: 0.0.0.0
+  GENERIC_TIMEZONE: Asia/Kolkata
+  TZ: Asia/Kolkata
+  # workflows read their configuration from $env
+  N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+  NODE_FUNCTION_ALLOW_BUILTIN: crypto
+  # our message_log is the audit trail; don't keep successful executions
+  EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+  EXECUTIONS_DATA_SAVE_ON_ERROR: all
+  EXECUTIONS_DATA_PRUNE: "true"
+  EXECUTIONS_DATA_MAX_AGE: "72"
+  N8N_DIAGNOSTICS_ENABLED: "false"
+  N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+  N8N_TEMPLATES_ENABLED: "false"
+  N8N_RUNNERS_TASK_TIMEOUT: "60"
+  # bot configuration (see .env.example)
+  ENV: ${ENV:-prod}
+  META_APP_SECRET: ${META_APP_SECRET:?set META_APP_SECRET}
+  WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:?set WHATSAPP_VERIFY_TOKEN}
+  WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:?set WHATSAPP_PHONE_NUMBER_ID}
+  WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:?set WHATSAPP_ACCESS_TOKEN}
+  GRAPH_API_VERSION: ${GRAPH_API_VERSION:-v23.0}
+  WA_API_BASE: ${WA_API_BASE:-https://graph.facebook.com}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+  LLM_ENABLED: ${LLM_ENABLED:-true}
+  LLM_MODEL: ${LLM_MODEL:-claude-haiku-4-5}
+  PHONE_HASH_SECRET: ${PHONE_HASH_SECRET:?set PHONE_HASH_SECRET}
+  PGCRYPTO_KEY: ${PGCRYPTO_KEY:?set PGCRYPTO_KEY}
+  ADMIN_WA_NUMBERS: ${ADMIN_WA_NUMBERS:-}
+  ADMIN_ALERT_TEMPLATE: ${ADMIN_ALERT_TEMPLATE:-admin_alert}
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16.13
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-n8n}
+      POSTGRES_USER: ${POSTGRES_USER:-bot}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-sonpur_mela}
+      POSTGRES_DB: citizen_bot
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./deploy/init-databases.sql:/docker-entrypoint-initdb.d/00-init-databases.sql:ro
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${PG_HOST_PORT:-5432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-n8n}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bot} -d citizen_bot"]
       interval: 10s
       timeout: 5s
-      retries: 5
-
-  ollama:
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    volumes:
-      - ollama_data:/root/.ollama
-    ports:
-      - "127.0.0.1:11434:11434"
-    # If you have an NVIDIA GPU on the host, uncomment to use it:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+      retries: 10
 
   n8n:
-    image: n8nio/n8n:latest
+    image: n8nio/n8n:2.40.5
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
-    environment:
-      N8N_HOST: ${N8N_HOST:-localhost}
-      N8N_PORT: 5678
-      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
-      WEBHOOK_URL: ${WEBHOOK_URL:-http://localhost:5678/}
-      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-Asia/Kolkata}
-      N8N_BASIC_AUTH_ACTIVE: "true"
-      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:?set N8N_BASIC_AUTH_USER in .env}
-      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD:?set N8N_BASIC_AUTH_PASSWORD in .env}
-      # n8n blocks $env.* access from node expressions by default (security
-      # gate). This workflow deliberately reads config (tokens, model names,
-      # the control-room fallback number) via $env instead of hardcoding it,
-      # so this must stay enabled. Verified against a live n8n instance —
-      # without this, every node using $env fails silently.
-      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
-      # Exposed as $env.* inside the imported workflow's expressions.
-      OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-llama3.1:8b}
-      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
-      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID}
-      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN}
-      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN}
-      DISTRICT_CONTROL_ROOM_NUMBER: ${DISTRICT_CONTROL_ROOM_NUMBER}
+    environment: *n8n-env
     volumes:
       - n8n_data:/home/node/.n8n
     ports:
-      - "5678:5678"
+      - "127.0.0.1:${N8N_HOST_PORT:-5678}:5678"
+
+  # Path filter in front of n8n: only the webhook + health endpoints are forwarded.
+  caddy:
+    image: caddy:2.10
+    restart: unless-stopped
+    depends_on: [n8n]
+    environment:
+      SITE_ADDRESS: ":80"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+
+  # Office machine: outbound-only Cloudflare Tunnel -> caddy (no inbound ports, no static IP).
+  cloudflared:
+    image: cloudflare/cloudflared:2025.9.1
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    depends_on: [caddy]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-missing-token}
+
+  # VPS fallback: Caddy with automatic Let's Encrypt TLS on the public IP.
+  caddy-public:
+    image: caddy:2.10
+    profiles: ["vps"]
+    restart: unless-stopped
+    depends_on: [n8n]
+    environment:
+      SITE_ADDRESS: ${PUBLIC_HOST:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+
+  # One-shot jobs
+  migrate:
+    image: postgres:16.13
+    profiles: ["jobs"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app
+    volumes: [".:/app:ro"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-bot}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: citizen_bot
+      ADMIN_WA_NUMBERS: ${ADMIN_WA_NUMBERS:-}
+      PHONE_HASH_SECRET: ${PHONE_HASH_SECRET}
+    entrypoint: ["bash", "scripts/db_migrate.sh"]
+
+  import:
+    image: n8nio/n8n:2.40.5
+    profiles: ["jobs"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app
+    volumes: [".:/app:ro", "n8n_data:/home/node/.n8n"]
+    environment:
+      <<: *n8n-env
+      N8N_BIN: n8n
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: citizen_bot
+      POSTGRES_USER: ${POSTGRES_USER:-bot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    entrypoint: ["sh", "scripts/n8n_import.sh"]
 
 volumes:
   postgres_data:
-  ollama_data:
   n8n_data:
+  caddy_data:

@@ -1,0 +1,10 @@
+# Only Meta's webhook and the health check are exposed; the n8n editor and API are not.
+{$SITE_ADDRESS} {
+	@allowed path /webhook/wa /webhook/wa/* /healthz
+	handle @allowed {
+		reverse_proxy n8n:5678
+	}
+	handle {
+		respond "Not found" 404
+	}
+}
