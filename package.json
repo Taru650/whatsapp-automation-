@@ -1,0 +1,18 @@
+{
+  "name": "saran-citizen-whatsapp-bot",
+  "private": true,
+  "description": "WhatsApp citizen-services bot on n8n (Phase 1: Sonpur Mela)",
+  "config": {
+    "n8nVersion": "2.40.5"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "node scripts/build_workflows.mjs",
+    "test:unit": "node --test \"tests/unit/*.test.mjs\"",
+    "check": "node scripts/build_workflows.mjs --check && npm run test:unit",
+    "test:sql": "psql -X -v ON_ERROR_STOP=1 -f tests/sql/core_test.sql && python3 tests/check_templates.py",
+    "test:flow": "python3 tests/run_flow_tests.py"
+  }
+}
