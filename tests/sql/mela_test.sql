@@ -31,7 +31,7 @@ BEGIN
 
     -- a re-sync never wipes captured points
     PERFORM svc_mela.replace_all(d);
-    ASSERT (SELECT count(*) FROM svc_mela.place_coords) = 2, 'place_coords survive replace_all';
+    ASSERT (SELECT count(*) FROM svc_mela.place_coords WHERE place_id IN ('TH01', 'GH01')) = 2, 'place_coords survive replace_all';
 
     -- a sheet without a number removes it from the phone guard
     PERFORM svc_mela.replace_all(jsonb_set(d, '{duty}', '[]'));
@@ -42,6 +42,14 @@ BEGIN
     ASSERT NOT (core.record_sync('{"service_key": "mela", "status": "rejected", "errors": [{"row": 14}]}')->>'should_alert')::boolean, 'same failure is quiet';
     ASSERT (core.record_sync('{"service_key": "mela", "status": "rejected", "errors": [{"row": 15}]}')->>'should_alert')::boolean, 'new failure alerts';
     ASSERT NOT (core.record_sync('{"service_key": "mela", "status": "ok", "rows": 50}')->>'should_alert')::boolean, 'success never alerts';
+
+    -- health: ok with a fresh successful sync, degraded when it is over an hour old
+    UPDATE core.services SET enabled = true WHERE service_key = 'mela';
+    DELETE FROM core.sync_runs;
+    PERFORM core.record_sync('{"service_key": "mela", "status": "ok", "rows": 2}');
+    ASSERT core.health()->>'status' = 'ok', 'fresh sync is healthy: ' || core.health()::text;
+    UPDATE core.sync_runs SET ts = now() - interval '2 hours';
+    ASSERT core.health()->>'status' = 'degraded' AND core.health()->'issues'->>0 LIKE 'mela sheet not synced%', 'stale sync degrades';
 
     ASSERT (SELECT length(content) FROM svc_mela.qa_context) > 1000, 'Q&A context loaded by db_migrate.sh';
     ASSERT (SELECT enabled FROM core.services WHERE service_key = 'mela') IS NOT NULL, 'mela registered';

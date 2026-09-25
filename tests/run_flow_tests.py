@@ -194,6 +194,14 @@ def verify_handshake():
 
 
 @scenario
+def health_endpoint_reports_status():
+    s, b = http("GET", f"{N8N}/webhook/health")
+    assert s == 200, (s, b)
+    h = json.loads(b)
+    assert h["status"] in ("ok", "degraded") and "services_enabled" in h and "errors_last_15m" in h, h
+
+
+@scenario
 def bad_signature_is_ignored():
     u = user()
     send(u, m_text(u, "hi"), signature="sha256=" + "0" * 64)
