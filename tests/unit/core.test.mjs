@@ -69,6 +69,9 @@ test('normalize: all message kinds', () => {
   assert.equal(l.kind, 'list'); assert.equal(l.id, 'mela:cat:thana');
   const loc = normalizeMessage({ type: 'location', location: { latitude: 25.68, longitude: '85.18' } });
   assert.equal(loc.kind, 'location'); assert.equal(loc.lon, 85.18);
+  for (const bad of [{}, { latitude: 'x', longitude: 1 }, { latitude: 95, longitude: 85 }, { latitude: 25, longitude: null }]) {
+    assert.equal(normalizeMessage({ type: 'location', location: bad }).kind, 'unsupported', JSON.stringify(bad));
+  }
   assert.equal(normalizeMessage({ type: 'audio', audio: {} }).kind, 'unsupported');
   assert.equal(normalizeMessage({ type: 'button', button: { payload: 'x:y', text: 'Y' } }).id, 'x:y');
   assert.equal(guessLang('123'), null);
@@ -166,6 +169,17 @@ test('phone guard: finds phones, ignores dates/times/short numbers', () => {
   assert.deepEqual(extractPhones('https://wa.me/919431012345'), ['919431012345']);
   // regression: a number at the end of a line must not fuse with the next list number
   assert.deepEqual(extractPhones('👤 Ajay – 📞 6201113074\n\n7. *Bajrang Chowk*\n👤 X – 📞 9471451376'), ['6201113074', '9471451376']);
+});
+
+test('phone guard: no bypass through other digit scripts or dots (audit)', () => {
+  assert.deepEqual(extractPhones('कॉल करें ९८७६५४३२१०'), ['9876543210'], 'Devanagari digits');
+  assert.deepEqual(extractPhones('call ９８７６５４３２１０'), ['9876543210'], 'full-width digits');
+  assert.deepEqual(extractPhones('call 98765.43210'), ['9876543210'], 'dot-separated');
+  assert.deepEqual(extractPhones('call 98.76.54.32.10'), ['9876543210']);
+  assert.deepEqual(extractPhones('२४-११-२०२६ को'), [], 'a date in Devanagari digits is not a phone');
+  assert.deepEqual(extractPhones('on 24-11-2026 and 24.11.26, Mela 2025-26, show 18.00-20.00, 1.2 km'), []);
+  assert.deepEqual(extractPhones('destination=25.692211,85.175233 and 25.6922, 85.1752'), []);
+  assert.deepEqual(extractPhones('Helpline 06158-221084.'), ['06158221084'], 'trailing full stop');
 });
 
 // --- contract --------------------------------------------------------------

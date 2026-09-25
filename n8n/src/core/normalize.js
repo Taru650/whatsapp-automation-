@@ -32,7 +32,12 @@ function normalizeMessage(message) {
       return { ...base, kind: 'button', id: (m.button || {}).payload || null, text: (m.button || {}).text || null };
     case 'location': {
       const loc = m.location || {};
-      return { ...base, kind: 'location', lat: Number(loc.latitude), lon: Number(loc.longitude) };
+      const num = (v) => (v === null || v === undefined || v === '' ? NaN : Number(v)); // Number(null) is 0
+      const lat = num(loc.latitude);
+      const lon = num(loc.longitude);
+      // a malformed pin must never reach distance maths or an admin capture
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return base;
+      return { ...base, kind: 'location', lat, lon };
     }
     default:
       return base; // audio, voice, image, video, sticker, document, contacts, reaction, ...

@@ -105,7 +105,9 @@ try {
 if (!$json.ok) {
   return { json: { status: 'error', data: null, counts: {}, warnings: [], errors: [{ tab: '*', row: 0, msg: 'could not read the Google Sheet: ' + $json.fetch_error }] } };
 }
-const prod = $env.ENV === 'prod';
+// Fail safe: anything but an explicit test/staging environment (including a typo
+// such as ENV=production, or ENV unset) publishes only verified rows.
+const prod = !['test', 'staging'].includes(String($env.ENV || '').trim().toLowerCase());
 const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
 const r = validateMelaSheet($json.tabs, { requireVerified: prod, rejectPlaceholders: prod, today });
 return { json: { status: r.errors.length ? 'rejected' : 'ok', data: r.data, counts: r.counts, errors: r.errors.slice(0, 50), warnings: r.warnings.slice(0, 50) } };
