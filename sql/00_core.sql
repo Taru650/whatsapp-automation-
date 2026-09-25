@@ -265,8 +265,10 @@ END $$;
 
 -- end_turn: save the new session state with an optimistic version check and
 -- annotate the inbound log row. Returns false on a version conflict (a second
--- message from the same citizen was processed concurrently); the router then
--- re-runs the turn once.
+-- message from the same citizen was processed concurrently). The reply has
+-- already been delivered by then, so the turn is not re-run (that would send it
+-- twice): the conflict is recorded on the inbound row and the other turn's
+-- session state stands.
 CREATE OR REPLACE FUNCTION core.end_turn(
     p_wa_hash      text,
     p_version      int,
@@ -440,7 +442,8 @@ LANGUAGE sql STABLE AS $$
         'issues', coalesce(to_jsonb((SELECT list FROM issues)), '[]'::jsonb),
         'services_enabled', (SELECT coalesce(jsonb_agg(service_key ORDER BY menu_order), '[]') FROM core.services WHERE enabled),
         'last_inbound_ist', (SELECT to_char(max(ts) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI') FROM core.message_log WHERE direction = 'in'),
-        'errors_last_15m', (SELECT count(*) FROM core.message_log WHERE error IS NOT NULL AND ts > now() - interval '15 minutes'),
+        'errors_last_15m', (SELECT count(*) FROM core.message_log WHERE ts > now() - interval '15 minutes'
+                            AND ((error IS NOT NULL AND error <> 'version_conflict') OR subtype = 'error')),
         'checked_at_ist', to_char(now() AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS'))
 $$;
 

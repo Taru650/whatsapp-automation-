@@ -24,6 +24,13 @@ INSERT INTO core.settings (key, value) VALUES
     ('usd_inr', '84')
 ON CONFLICT (key) DO NOTHING;
 
+-- Indexes for the dashboard/report queries at Mela scale (millions of rows).
+CREATE INDEX IF NOT EXISTS message_log_out_err_idx ON core.message_log (ts)
+    WHERE direction = 'out' AND error IS NOT NULL;
+-- "day = X" / "day >= X" filters on the views use this (IST calendar day)
+CREATE INDEX IF NOT EXISTS message_log_in_day_idx ON core.message_log (((ts AT TIME ZONE 'Asia/Kolkata')::date))
+    WHERE direction = 'in';
+
 -- Aggregates that outlive the purge (no personal data): next year's Mela can be
 -- compared with this one.
 CREATE TABLE IF NOT EXISTS analytics.daily_archive (
@@ -37,9 +44,12 @@ CREATE TABLE IF NOT EXISTS analytics.daily_archive (
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION analytics.mask(p text) RETURNS text
 LANGUAGE sql IMMUTABLE AS $$
+    -- Devanagari / full-width digits are folded to ASCII first, so a number typed
+    -- as ९८७६५४३२१० is masked too; dots count as separators (98765.43210).
     SELECT regexp_replace(
-             regexp_replace(p, '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '[email]', 'g'),
-             '\+?\d[\d \t-]{4,}\d', '[number]', 'g')
+             regexp_replace(translate(p, '०१२३४५६७८९０１２３４５６７８９', '01234567890123456789'),
+                            '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '[email]', 'g'),
+             '\+?\d[\d \t.-]{4,}\d', '[number]', 'g')
 $$;
 
 -- Normalised free text for grouping "themes": masked, lower-case, no punctuation.
@@ -59,6 +69,9 @@ CREATE OR REPLACE FUNCTION analytics.since() RETURNS timestamptz
 LANGUAGE sql STABLE AS $$
     SELECT (analytics.setting('analytics_since', '2000-01-01')::date)::timestamp AT TIME ZONE 'Asia/Kolkata'
 $$;
+-- Views compare against "(SELECT analytics.since())": a scalar subquery is
+-- evaluated once per query. A bare call is evaluated per row (a SECURITY
+-- DEFINER function can't be inlined): 39 s instead of 0.1 s on 4.8M rows.
 
 -- ---------------------------------------------------------------------------
 -- Base views
@@ -75,7 +88,7 @@ SELECT m.id,
        CASE WHEN m.kind = 'text' THEN analytics.mask(m.text) END AS text_masked
 FROM core.message_log m
 WHERE m.direction = 'in'
-  AND m.ts >= analytics.since()
+  AND m.ts >= (SELECT analytics.since())
   AND NOT EXISTS (SELECT 1 FROM core.admins a WHERE a.wa_hash = m.wa_hash);
 
 -- Outbound delivery failures (Graph API errors, phone-guard blocks).
@@ -85,7 +98,8 @@ SELECT (m.ts AT TIME ZONE 'Asia/Kolkata')::date AS day,
        m.service_key, m.kind, left(m.error, 200) AS error
 FROM core.message_log m
 WHERE m.direction = 'out' AND m.error IS NOT NULL
-  AND m.ts >= analytics.since()
+  AND coalesce(m.service_key, '') <> 'admin'     -- admin alerts are reported separately
+  AND m.ts >= (SELECT analytics.since())
   AND NOT EXISTS (SELECT 1 FROM core.admins a WHERE a.wa_hash = m.wa_hash);
 
 -- Feedback, attributed to the answer it was about (the citizen's previous turn).
@@ -101,7 +115,7 @@ LEFT JOIN LATERAL (
       AND coalesce(m.subtype, '') NOT IN ('feedback', 'menu')
     ORDER BY m.ts DESC LIMIT 1
 ) prev ON true
-WHERE f.ts >= analytics.since()
+WHERE f.ts >= (SELECT analytics.since())
   AND NOT EXISTS (SELECT 1 FROM core.admins a WHERE a.wa_hash = f.wa_hash);
 
 -- Questions the bot could not answer (the weekly review list).
@@ -112,7 +126,7 @@ SELECT (u.ts AT TIME ZONE 'Asia/Kolkata')         AS ts_ist,
        analytics.mask(u.text)                     AS text_masked,
        analytics.theme(u.text)                    AS theme
 FROM core.unanswered u
-WHERE u.ts >= analytics.since()
+WHERE u.ts >= (SELECT analytics.since())
   AND NOT EXISTS (SELECT 1 FROM core.admins a WHERE a.wa_hash = u.wa_hash);
 
 -- ---------------------------------------------------------------------------
@@ -130,7 +144,9 @@ WITH t AS (
            count(*) FILTER (WHERE via = 'llm')                   AS via_llm,
            count(*) FILTER (WHERE resolved)                      AS resolved,
            count(*) FILTER (WHERE resolved IS NOT NULL)          AS judged,
-           count(*) FILTER (WHERE error IS NOT NULL)             AS turn_errors,
+           -- a service that failed (citizen got the apology); version conflicts
+           -- (double taps, reply already sent) are not errors
+           count(*) FILTER (WHERE subtype = 'error')             AS turn_errors,
            coalesce(sum(llm_tokens), 0)                          AS llm_tokens,
            percentile_cont(0.5)  WITHIN GROUP (ORDER BY latency_ms) AS p50_ms,
            percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_ms
@@ -138,7 +154,7 @@ WITH t AS (
 ), n AS (
     SELECT (first_seen AT TIME ZONE 'Asia/Kolkata')::date AS day, count(*) AS new_citizens
     FROM core.citizens c
-    WHERE first_seen >= analytics.since()
+    WHERE first_seen >= (SELECT analytics.since())
       AND NOT EXISTS (SELECT 1 FROM core.admins a WHERE a.wa_hash = c.wa_hash)
     GROUP BY 1
 ), f AS (
@@ -221,7 +237,7 @@ LANGUAGE sql STABLE AS $$
     ), adm AS (
         SELECT * FROM raw WHERE wa_hash IN (SELECT wa_hash FROM core.admins)
     ), early AS (
-        SELECT * FROM raw WHERE ts < analytics.since() AND wa_hash NOT IN (SELECT wa_hash FROM core.admins)
+        SELECT * FROM raw WHERE ts < (SELECT analytics.since()) AND wa_hash NOT IN (SELECT wa_hash FROM core.admins)
     ), v AS (
         SELECT * FROM analytics.v_daily WHERE day = p_day
     )
@@ -232,12 +248,12 @@ LANGUAGE sql STABLE AS $$
         'before_go_live', (SELECT count(*) FROM early),
         'view_turns', coalesce((SELECT turns FROM v), 0),
         'raw_citizens', (SELECT count(DISTINCT wa_hash) FROM raw
-                         WHERE wa_hash NOT IN (SELECT wa_hash FROM core.admins) AND ts >= analytics.since()),
+                         WHERE wa_hash NOT IN (SELECT wa_hash FROM core.admins) AND ts >= (SELECT analytics.since())),
         'view_citizens', coalesce((SELECT citizens FROM v), 0),
         'ok', (SELECT count(*) FROM raw) - (SELECT count(*) FROM adm) - (SELECT count(*) FROM early)
                   = coalesce((SELECT turns FROM v), 0)
               AND (SELECT count(DISTINCT wa_hash) FROM raw
-                   WHERE wa_hash NOT IN (SELECT wa_hash FROM core.admins) AND ts >= analytics.since())
+                   WHERE wa_hash NOT IN (SELECT wa_hash FROM core.admins) AND ts >= (SELECT analytics.since()))
                   = coalesce((SELECT citizens FROM v), 0))
 $$;
 
@@ -280,9 +296,11 @@ DECLARE
     svc      record;
     extra    text;
     syncs    text;
+    adm_fail int;
 BEGIN
-    PERFORM analytics.archive_day(d);
     s := analytics.day_stats(d);
+    INSERT INTO analytics.daily_archive (day, stats) VALUES (d, s)
+    ON CONFLICT (day) DO UPDATE SET stats = EXCLUDED.stats, archived_at = now();
 
     SELECT string_agg(format('%s %s', x->>'subtype', x->>'turns'), ', ')
       INTO topics FROM jsonb_array_elements(s->'top_topics') x;
@@ -310,6 +328,12 @@ BEGIN
         coalesce(s->>'turn_errors', '0'), coalesce(s->>'send_errors', '0'), coalesce(s->>'p95_ms', '-'),
         coalesce(s->>'llm_tokens', '0'), round(coalesce((s->>'llm_usd_est')::numeric, 0) * inr, 2));
     IF syncs IS NOT NULL THEN lines := lines || ('Sheet sync problems: ' || syncs); END IF;
+    SELECT count(*) INTO adm_fail FROM core.message_log
+     WHERE direction = 'out' AND service_key = 'admin' AND error IS NOT NULL
+       AND (ts AT TIME ZONE 'Asia/Kolkata')::date = d;
+    IF adm_fail > 0 THEN
+        lines := lines || format('⚠ %s admin WhatsApp alert(s) failed to send - is the admin_alert template approved?', adm_fail);
+    END IF;
 
     FOR svc IN SELECT service_key FROM core.services WHERE enabled ORDER BY menu_order LOOP
         IF to_regprocedure(format('svc_%s.digest()', svc.service_key)) IS NOT NULL THEN
