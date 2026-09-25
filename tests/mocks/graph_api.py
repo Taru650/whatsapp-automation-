@@ -12,6 +12,7 @@ Stdlib only. Usage: python tests/mocks/graph_api.py --port 8081
 import argparse
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LOCK = threading.Lock()
@@ -115,7 +116,7 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             COUNTER[0] += 1
             n = COUNTER[0]
-            CAPTURED.append({"n": n, "path": self.path, "payload": payload, "errors": errs, "auth": auth_ok})
+            CAPTURED.append({"n": n, "ts": time.time(), "path": self.path, "payload": payload, "errors": errs, "auth": auth_ok})
         if errs:
             return self._send(400, {"error": {"message": "; ".join(errs), "type": "OAuthException", "code": 100}})
         self._send(200, {"messaging_product": "whatsapp", "contacts": [{"wa_id": payload.get("to")}],

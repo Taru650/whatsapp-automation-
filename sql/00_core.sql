@@ -410,3 +410,50 @@ BEGIN
     RETURN jsonb_build_object('ok', true);
 END $$;
 
+
+-- Health for external uptime monitoring (GET /webhook/health).
+-- If this query runs, the bot can answer ("ok"). "degraded" means citizens are
+-- still served but something needs attention (e.g. the sheet sync keeps failing,
+-- so answers are getting stale). A DB outage makes the webhook return HTTP 500.
+CREATE OR REPLACE FUNCTION core.health() RETURNS jsonb
+LANGUAGE sql STABLE AS $$
+    WITH sync AS (
+        SELECT s.service_key,
+               max(r.ts) FILTER (WHERE r.status = 'ok') AS last_ok,
+               max(r.ts) AS last_run
+        FROM core.services s
+        LEFT JOIN core.sync_runs r ON r.service_key = s.service_key
+        WHERE s.enabled AND s.service_key IN (SELECT DISTINCT service_key FROM core.sync_runs)
+        GROUP BY s.service_key
+    ), issues AS (
+        SELECT array_agg(service_key || ' sheet not synced for over 1 hour (last success: '
+                         || coalesce(to_char(last_ok AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:MI'), 'never') || ')') AS list
+        FROM sync WHERE last_ok IS NULL OR last_ok < now() - interval '1 hour'
+    )
+    SELECT jsonb_build_object(
+        'status', CASE WHEN (SELECT list FROM issues) IS NULL THEN 'ok' ELSE 'degraded' END,
+        'issues', coalesce(to_jsonb((SELECT list FROM issues)), '[]'::jsonb),
+        'services_enabled', (SELECT coalesce(jsonb_agg(service_key ORDER BY menu_order), '[]') FROM core.services WHERE enabled),
+        'last_inbound_ist', (SELECT to_char(max(ts) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI') FROM core.message_log WHERE direction = 'in'),
+        'errors_last_15m', (SELECT count(*) FROM core.message_log WHERE error IS NOT NULL AND ts > now() - interval '15 minutes'),
+        'checked_at_ist', to_char(now() AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS'))
+$$;
+
+-- One call after a turn is delivered: persist the session and log every outbound
+-- message. p = {end: <rpc_end_turn payload or null>, outs: [{wa_hash, service_key, kind, text, out_id, error}]}
+CREATE OR REPLACE FUNCTION core.rpc_finish_turn(p jsonb) RETURNS jsonb
+LANGUAGE plpgsql AS $$
+DECLARE o jsonb; r jsonb;
+BEGIN
+    FOR o IN SELECT * FROM jsonb_array_elements(coalesce(p->'outs', '[]')) LOOP
+        PERFORM core.rpc_log_out(o);
+    END LOOP;
+    r := core.rpc_end_turn(p->'end');
+    RETURN r;
+END $$;
+
+-- Allowed numbers for the phone guard, as one array.
+CREATE OR REPLACE FUNCTION core.allowed_numbers() RETURNS text[]
+LANGUAGE sql STABLE AS $$
+    SELECT coalesce(array_agg(DISTINCT phone), '{}') FROM core.number_registry
+$$;

@@ -16,6 +16,7 @@ const targets = {
   'core/core-01-send.json': core.send,
   'core/core-02-llm.json': core.llm,
   'core/core-03-admin-alert.json': core.alert,
+  'core/core-04-health.json': core.health,
   'core/core-08-error.json': core.error,
   'core/core-99-test-harness.json': core.harness,
   'services/svc-echo.json': services.echo,

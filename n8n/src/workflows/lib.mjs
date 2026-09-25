@@ -15,6 +15,7 @@ export const IDS = {
   alert: 'CoreAlert0000001',
   error: 'CoreError0000001',
   harness: 'CoreHarness00001',
+  health: 'CoreHealth000001',
   echo: 'SvcEcho000000001',
   template: 'SvcTemplate00001',
   mela: 'SvcMela000000001',
