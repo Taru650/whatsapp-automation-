@@ -1,7 +1,7 @@
 # Saran Citizen WhatsApp Bot: Detailed Implementation Plan
 ### Phase 1: Sonpur Mela
 
-*Version 1.2 · 24 Sep 2026 · Phase 1 = Sonpur Mela only; local-first hosting with VPS fallback · Branch `claude/whatsapp-n8n-llm-chatbot-o9gtyo`*
+*Version 1.3 · 25 Sep 2026 · M0–M3 built · Phase 1 = Sonpur Mela only; local-first hosting with VPS fallback · Branch `claude/whatsapp-n8n-llm-chatbot-o9gtyo`*
 
 > **Summary.**
 > - **What:** a WhatsApp bot built on n8n where a citizen types "Hi" and gets **Sonpur Mela** information: programme, control room, police, health and vet camps, parking, ghats.
@@ -574,6 +574,26 @@ Effort is in developer-days for 1 developer, plus a part-time data/ops owner on 
 - A sampled day reconciles with `message_log`.
 - The purge is verified on a copy.
 - No raw numbers are visible anywhere in Metabase.
+
+**M3 as built** (code complete; each gate item has an automated check):
+- **Logging gaps closed first:**
+  - Q&A tokens are now counted.
+  - Near me logs a distance bucket and origin (`gps:<500m`, `landmark:…`), never the location.
+  - Q&A "don't know" answers go into `core.unanswered`.
+- **Privacy rules in the `analytics` schema:**
+  - Citizens appear only as a 10-character ref, and typed digit runs and e-mails are masked.
+  - Admin phones and pre-go-live (`analytics_since`) rows are excluded.
+  - The Metabase login `metabase_ro` can read only this schema.
+- **Gate evidence:**
+  - Reconciliation: `analytics.reconcile(day)` is covered by the SQL tests and flow tests.
+  - Purge on a copy: `tests/restore_drill.sh` runs `core.run_purge()` on the restored copy.
+  - No numbers in Metabase: `scripts/metabase_setup.py --verify` runs every card, scans the values and probes `core`. It also runs in CI against a real Metabase 0.63.
+- **Daily report:**
+  - WhatsApp `admin_alert` gets one line, because template parameters can't contain newlines.
+  - SMTP e-mail gets the full text. It is optional, because the template may not be approved in time.
+  - Services add their own line through `svc_<key>.digest()`; Mela reports map-pin coverage and sheet-sync freshness.
+- **Daily totals are archived before each purge** (`analytics.daily_archive`), so next year's Mela can be compared with this one after the 180-day deletion.
+- **"Top free-text themes"** is a normalised-text grouping of unanswered questions, not LLM clustering. [Likely] It is enough at Mela volumes and costs nothing. Revisit if the list gets long.
 
 **Phase 1 total:** about 32.5 developer-days (M0 11 + M1 12.5 + M2 4 + M3 5). The go-live path (M0–M2) is about **27.5 days (≈5.5 weeks)**, which leaves **about 1 week of buffer** before ~10 Nov.
 

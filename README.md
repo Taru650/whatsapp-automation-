@@ -11,10 +11,12 @@ Eligibility plug in later without rebuilding the bot.
 - New service: [`docs/adding-a-service.md`](docs/adding-a-service.md)
 - Mela data owners: [`docs/data-entry-guide.md`](docs/data-entry-guide.md)
 - Go-live (M2): [`docs/go-live.md`](docs/go-live.md): capacity results, hosting go/no-go, UAT, cut-over
+- Analytics (M3): [`docs/runbook.md` § Analytics](docs/runbook.md#analytics-m3): dashboard, daily report, purge, weekly review
 
 **Status:**
 - **M0 (core platform):** done.
 - **M2 (go-live readiness):** health endpoint, backups/restore, VPS provisioning, load-tested (capacity about 6–7 msg/s, queue mode optional), go-live checklist. Waiting on the office machine burn-in, UAT and sign-offs.
+- **M3 (analytics):** Metabase dashboard (14 cards, privacy-verified), 08:00 daily report on WhatsApp and e-mail, nightly 180-day purge with a permanent daily archive, weekly unanswered review. Needs: SMTP details, Metabase on the office machine, `analytics_since` set at cut-over.
 - **M1 (Sonpur Mela):**
   - built: programme, control room, on-duty thana/health/vet cards, parking, ghats, 📍 near me with walking directions, admin site pinning, Q&A from approved text, Google Sheet sync with validation and alerts
   - waiting on real district data and a real-phone check
@@ -62,10 +64,10 @@ npm run check                      # generated JSON up to date + unit tests
 PGHOST=... PGUSER=... PGPASSWORD=... scripts/dev_up.sh   # migrate, mocks, import, start n8n
 set -a; source tests/test.env; set +a
 npm run test:sql                   # SQL asserts + template limits
-npm run test:flow                  # 33 end-to-end scenarios through the live n8n
+npm run test:flow                  # 36 end-to-end scenarios through the live n8n
 python3 tests/run_mela_routing_eval.py   # free-text routing accuracy (LLM part needs a real key)
 python3 tests/load_test.py --rate 6 --duration 60   # capacity (docs/go-live.md §1)
-tests/restore_drill.sh                   # backup -> restore -> compare every table
+tests/restore_drill.sh                   # backup -> restore -> compare every table -> purge the copy
 scripts/dev_up.sh stop
 ```
 

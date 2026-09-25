@@ -64,7 +64,8 @@ All commands run from the repository root on the host. `dc` = `docker compose`
 | Change admin numbers | edit `ADMIN_WA_NUMBERS` → `dc run --rm migrate` (stores hashes) and `dc up -d n8n` |
 | Recent errors | `... -c "select ts, service_key, error from core.message_log where error is not null order by id desc limit 20"` |
 | Mela sync history | `... -c "select ts, status, rows, errors from core.sync_runs where service_key='mela' order by id desc limit 10"` |
-| Unanswered questions | `... -c "select ts, reason, text from core.unanswered order by id desc limit 50"` |
+| Unanswered questions | Metabase card "Unanswered themes", or `... -c "select * from analytics.v_unanswered_themes order by times desc limit 30"` |
+| Re-send a day's report | `curl` is not exposed; in the n8n editor open `core-85-daily-report` → *Execute workflow* (yesterday), or `... -c "select analytics.daily_report('2026-11-25')->>'text'"` |
 | Emergency UI hotfix | fix in the UI, then `scripts/n8n_export.sh`, port it to `n8n/src`, rebuild, redeploy |
 
 ## Monitoring
@@ -86,6 +87,54 @@ All commands run from the repository root on the host. `dc` = `docker compose`
 - **Restore:** `dc stop n8n && BACKUP_PASSPHRASE=... scripts/restore.sh [stamp] && dc run --rm import && dc up -d`.
 - **Drill:** `tests/restore_drill.sh` restores into a scratch database and
   compares every table. It runs in CI; also run it once on the office machine.
+
+## Analytics (M3)
+**What exists**
+- `analytics` schema (`sql/20_analytics.sql`): views for Metabase, with no
+  phone numbers. Citizens appear only as a 10-character pseudonymous ref, and
+  digit runs or e-mails citizens type are masked. Admin phones and anything
+  before `analytics_since` are never counted.
+- **08:00 IST daily report** (`core-85-daily-report`): yesterday's citizens,
+  messages, answered %, 👍/👎, top topics, peak hour, top unanswered questions,
+  errors, reply time, AI cost, sheet-sync problems and the Mela pin/sync line.
+  It goes to every admin as the `admin_alert` template (one line) and, when
+  `SMTP_HOST` and `REPORT_EMAIL_TO` are set, by e-mail (full text).
+- **03:15 IST purge** (`core-09-purge`): archives each day's totals into
+  `analytics.daily_archive` (kept forever, no personal data), then deletes
+  personal data older than `retention_days` (180). If it fails, admins get an
+  alert. It refuses to run with retention under 30 days.
+
+**At cut-over (go-live day)**, so UAT traffic doesn't count:
+`... -c "update core.settings set value = '2026-11-10' where key = 'analytics_since'"`
+
+**Metabase (one-time)**
+1. In `.env`, set `METABASE_DB_PASSWORD`, `MB_ADMIN_EMAIL` and `MB_ADMIN_PASSWORD`.
+   Then run `dc run --rm migrate`, which creates the `metabase_ro` login and the `metabase` DB.
+2. `dc --profile analytics up -d metabase` (it uses about 1 GB RAM and takes 1–2 min to start).
+3. `dc run --rm metabase-setup`. This builds the "Citizen bot — daily overview"
+   dashboard and then **verifies** it: every card runs, no number-like values
+   appear, and the connection can't read `core`. Re-run it after pulling a new
+   version; it updates the cards in place.
+4. Open `http://<tailscale-ip>:3000` (never exposed publicly). Add viewers
+   under Admin → People, in a group with **view-only** access to the "Citizen bot"
+   collection and no native-query permission.
+
+**Weekly unanswered review (30 min, Monday)**
+1. Open the Metabase card *Unanswered themes (last 14 days)*.
+2. Handle each theme with ≥ 3 occurrences:
+   - **Missing data:** tell the data owner and add it to the sheet.
+   - **Wording citizens use:** add the keyword to `MELA_KEYWORDS` in
+     `n8n/src/services/mela.js` and a line in `tests/llm/mela_free_text.json`,
+     then deploy.
+   - **Out of scope:** no action. Note it for Directory/Schemes.
+3. Also check *Thumbs down by answer*. A 👎 rate above 20% on one answer means
+   that card's content or wording needs fixing.
+
+**Checks**
+- `... -c "select analytics.reconcile(current_date - 1)"` gives `"ok": true`.
+  That means the dashboard figures equal the raw log, minus admin and
+  pre-go-live rows.
+- The purge was tested on a restored copy by `tests/restore_drill.sh` (it also runs in CI).
 
 ## Capacity / queue mode
 - One n8n instance handles about 6–7 msg/s (docs/go-live.md §1). If traffic

@@ -108,6 +108,8 @@ from the bot itself.
    - verify token
    - subscribe to `messages`
 6. Smoke test from 3 phones (Hindi, English, and a basic phone without GPS).
+6a. Start counting from today (UAT traffic is excluded):
+   `update core.settings set value = '<today>' where key = 'analytics_since';`
 7. Announce: posters, QR codes at the control room and thanas, and district social media.
 
 **Rollback:** in Meta, point the webhook back to the previous URL, or
