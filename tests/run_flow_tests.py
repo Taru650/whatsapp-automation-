@@ -446,12 +446,14 @@ def failing_service_apologises_and_alerts_admins():
         send(u, m_button(u, "boom:open", "Boom"))
         out = wait_out(u, 2)
         assert "went wrong" in body_of(out[1]) or "गड़बड़" in body_of(out[1]), summary(out[1])
+        # other alerts (e.g. the scheduled sheet sync) may arrive too: look for ours
+        def boom_alerts():
+            return [c for c in out_to(ADMIN) if c["payload"].get("type") == "template"
+                    and "boom" in c["payload"]["template"]["components"][0]["parameters"][0]["text"]]
         end = time.time() + 20
-        while time.time() < end and not out_to(ADMIN):
+        while time.time() < end and not boom_alerts():
             time.sleep(0.5)
-        alerts = out_to(ADMIN)
-        assert alerts and alerts[0]["payload"]["type"] == "template", "admin alert template sent"
-        assert "boom" in alerts[0]["payload"]["template"]["components"][0]["parameters"][0]["text"]
+        assert boom_alerts(), "admin alert template naming the failed service: " + str([summary(c) for c in out_to(ADMIN)])
     finally:
         sql("delete from core.services where service_key = 'boom'")
 

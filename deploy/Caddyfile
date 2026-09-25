@@ -1,7 +1,12 @@
 # Only Meta's webhook and the health checks are exposed; the n8n editor and API are not.
 {$SITE_ADDRESS} {
-	@allowed path /webhook/wa /webhook/wa/* /webhook/health /healthz
+	# exact paths only: nothing else under /webhook/ (e.g. the test harness) is reachable
+	@allowed path /webhook/wa /webhook/health /healthz
 	handle @allowed {
+		# Meta's webhook bodies are a few KB; refuse anything big before it reaches n8n
+		request_body {
+			max_size 256KB
+		}
 		reverse_proxy n8n:5678
 	}
 	handle {

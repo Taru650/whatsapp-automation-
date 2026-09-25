@@ -57,6 +57,13 @@ jobs:
           set -a; source tests/test.env; set +a
           npm run test:flow
 
+      # Ingress: only webhook + health paths get through Caddy (the test harness is
+      # published in CI, so this proves it is unreachable from outside)
+      - name: Caddy path filter probe
+        run: |
+          curl -sSfL https://github.com/caddyserver/caddy/releases/download/v2.10.0/caddy_2.10.0_linux_amd64.tar.gz | tar -xz caddy
+          CADDY=./caddy tests/caddy_probe.sh
+
       # M3 gate: every dashboard card runs and nothing number-like is visible;
       # the Metabase connection cannot read the core schema.
       - name: Metabase dashboard provisioning + privacy verify
