@@ -6,6 +6,7 @@
 #   N8N_BIN      path to the n8n binary (default: npx --yes n8n@$N8N_VERSION)
 #   PGHOST/PGPORT/PGUSER/PGPASSWORD   an existing Postgres to use
 #   ENV_FILE     env file to load (default tests/test.env -> mocks, ENV=test)
+#   QUEUE_WORKERS=N  run n8n in queue mode: Redis + main + N workers (n8n data in Postgres)
 #
 #   scripts/dev_up.sh          migrate, start mocks, import workflows, start n8n
 #   scripts/dev_up.sh stop     stop mocks and n8n started by this script
@@ -16,7 +17,7 @@ mkdir -p "$RUN"
 N8N_VERSION=$(node -p "require('./package.json').config.n8nVersion")
 
 stop() {
-  for p in n8n graph anthropic sheets; do
+  for p in n8n graph anthropic sheets redis $(seq -f 'worker%g' 1 9); do
     [[ -f "$RUN/$p.pid" ]] && kill "$(cat "$RUN/$p.pid")" 2>/dev/null || true
     rm -f "$RUN/$p.pid"
   done
@@ -28,7 +29,11 @@ export PGHOST=${PGHOST:-127.0.0.1} PGPORT=${PGPORT:-5432} PGUSER=${PGUSER:-postg
 export PGDATABASE=${POSTGRES_DB:-citizen_bot}
 export POSTGRES_HOST=$PGHOST POSTGRES_PORT=$PGPORT POSTGRES_USER=$PGUSER POSTGRES_DB=$PGDATABASE
 export POSTGRES_PASSWORD=${PGPASSWORD:-postgres}
-export N8N_USER_FOLDER=${N8N_USER_FOLDER:-$PWD/$RUN/n8n}
+if [[ "${QUEUE_WORKERS:-0}" -gt 0 ]]; then
+  export N8N_USER_FOLDER=${N8N_USER_FOLDER:-$PWD/$RUN/n8n-queue}   # separate: shared encryption key
+else
+  export N8N_USER_FOLDER=${N8N_USER_FOLDER:-$PWD/$RUN/n8n}
+fi
 export N8N_BIN=${N8N_BIN:-npx --yes n8n@$N8N_VERSION}
 
 stop
@@ -46,8 +51,22 @@ if [[ -z "${GOOGLE_SA_JSON:-}" && "${ENV:-}" == "test" ]]; then
   export GOOGLE_SA_JSON=$(python3 -c "import json,sys; print(json.dumps({'type':'service_account','client_email':'bot@test.iam.gserviceaccount.com','private_key':open(sys.argv[1]).read(),'token_uri':'http://127.0.0.1:8083/token'}))" "$RUN/test_sa.pem")
 fi
 
+if [[ "${QUEUE_WORKERS:-0}" -gt 0 ]]; then
+  # Queue mode needs n8n's own data in Postgres and a shared encryption key.
+  psql -d postgres -Xqtc "select 1 from pg_database where datname='n8n'" | grep -q 1 || psql -d postgres -Xqc "create database n8n"
+  export DB_TYPE=postgresdb DB_POSTGRESDB_HOST=$PGHOST DB_POSTGRESDB_PORT=$PGPORT DB_POSTGRESDB_DATABASE=n8n
+  export DB_POSTGRESDB_USER=$PGUSER DB_POSTGRESDB_PASSWORD=$POSTGRES_PASSWORD
+  export EXECUTIONS_MODE=queue QUEUE_BULL_REDIS_HOST=127.0.0.1 QUEUE_BULL_REDIS_PORT=${REDIS_PORT:-6379}
+  export N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-dev-only-encryption-key}
+  redis-server --port "${REDIS_PORT:-6379}" --save '' --appendonly no > "$RUN/redis.log" 2>&1 & echo $! > "$RUN/redis.pid"
+fi
+
 scripts/n8n_import.sh
 $N8N_BIN start > "$RUN/n8n.log" 2>&1 & echo $! > "$RUN/n8n.pid"
+for i in $(seq 1 "${QUEUE_WORKERS:-0}"); do
+  N8N_RUNNERS_BROKER_PORT=$((5679 + i)) QUEUE_HEALTH_CHECK_PORT=$((5690 + i)) \
+    $N8N_BIN worker --concurrency=10 > "$RUN/worker$i.log" 2>&1 & echo $! > "$RUN/worker$i.pid"
+done
 # /healthz answers before workflows are activated; wait for the router webhook itself
 # (404 = not registered yet, 403 = registered and rejecting our dummy token).
 for _ in $(seq 1 120); do

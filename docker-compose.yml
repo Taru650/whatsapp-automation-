@@ -3,6 +3,8 @@
 #   office machine (default):  docker compose --profile tunnel up -d
 #   VPS fallback (plan §2.4):   docker compose --profile vps up -d
 #   staging next to prod:       docker compose -p bot-staging --env-file .env.staging --profile tunnel up -d
+#   more capacity (queue mode): EXECUTIONS_MODE=queue in .env, then
+#                               docker compose --profile tunnel --profile scale up -d --scale n8n-worker=3
 #
 # First deploy and every update:
 #   docker compose run --rm migrate          # apply sql/*.sql (idempotent)
@@ -37,6 +39,12 @@ x-n8n-env: &n8n-env
   N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
   N8N_TEMPLATES_ENABLED: "false"
   N8N_RUNNERS_TASK_TIMEOUT: "60"
+  # Bound concurrent executions so a traffic spike queues instead of thrashing
+  # (load test: no loss/duplicates at 2x capacity, self-recovers).
+  N8N_CONCURRENCY_PRODUCTION_LIMIT: ${N8N_CONCURRENCY_PRODUCTION_LIMIT:-10}
+  # Queue mode (profile "scale"): main takes webhooks, workers execute.
+  EXECUTIONS_MODE: ${EXECUTIONS_MODE:-regular}
+  QUEUE_BULL_REDIS_HOST: redis
   # bot configuration (see .env.example)
   ENV: ${ENV:-prod}
   META_APP_SECRET: ${META_APP_SECRET:?set META_APP_SECRET}
@@ -87,6 +95,26 @@ services:
       - n8n_data:/home/node/.n8n
     ports:
       - "127.0.0.1:${N8N_HOST_PORT:-5678}:5678"
+
+  # Queue mode (optional): Redis + N workers. Measured +30-40% on 4 shared cores;
+  # scales further with more cores. Needs EXECUTIONS_MODE=queue in .env.
+  redis:
+    image: redis:7.4
+    profiles: ["scale"]
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  n8n-worker:
+    image: n8nio/n8n:2.40.5
+    profiles: ["scale"]
+    restart: unless-stopped
+    command: worker --concurrency=10
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment: *n8n-env
 
   # Path filter in front of n8n: only the webhook + health endpoints are forwarded.
   caddy:

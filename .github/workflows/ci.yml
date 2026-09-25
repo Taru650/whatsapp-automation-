@@ -39,6 +39,9 @@ jobs:
           scripts/db_migrate.sh && scripts/db_migrate.sh
           npm run test:sql
 
+      - name: Backup -> restore drill
+        run: tests/restore_drill.sh
+
       - name: Mela free-text routing (keyword path; LLM cases are skipped without a key)
         run: python3 tests/run_mela_routing_eval.py
 
