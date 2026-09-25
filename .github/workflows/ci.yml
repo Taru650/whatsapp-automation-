@@ -36,6 +36,7 @@ jobs:
       - name: Migrate DB (twice, to prove idempotency) + SQL tests + template checks
         run: |
           set -a; source tests/test.env; set +a
+          export METABASE_DB_PASSWORD=ci-metabase-ro
           scripts/db_migrate.sh && scripts/db_migrate.sh
           npm run test:sql
 
@@ -55,6 +56,15 @@ jobs:
         run: |
           set -a; source tests/test.env; set +a
           npm run test:flow
+
+      # M3 gate: every dashboard card runs and nothing number-like is visible;
+      # the Metabase connection cannot read the core schema.
+      - name: Metabase dashboard provisioning + privacy verify
+        run: |
+          docker run -d --name metabase --network host -e MB_JETTY_PORT=3000 -e MB_LOAD_SAMPLE_CONTENT=false \
+            -e MB_ANON_TRACKING_ENABLED=false metabase/metabase:v0.63.18.2
+          MB_ADMIN_EMAIL=ci@example.test MB_ADMIN_PASSWORD=ci-Metabase-1 METABASE_DB_PASSWORD=ci-metabase-ro \
+            ANALYTICS_DB_HOST=127.0.0.1 ANALYTICS_DB_PORT=5432 python3 scripts/metabase_setup.py --verify --wait 420
 
       - name: n8n log
         if: failure()

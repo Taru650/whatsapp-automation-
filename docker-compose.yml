@@ -58,6 +58,10 @@ x-n8n-env: &n8n-env
   LLM_ENABLED: ${LLM_ENABLED:-true}
   LLM_MODEL: ${LLM_MODEL:-claude-haiku-4-5}
   PHONE_HASH_SECRET: ${PHONE_HASH_SECRET:?set PHONE_HASH_SECRET}
+  # daily report e-mail (optional; WhatsApp admin_alert is always sent)
+  SMTP_HOST: ${SMTP_HOST:-}
+  REPORT_EMAIL_TO: ${REPORT_EMAIL_TO:-}
+  REPORT_EMAIL_FROM: ${REPORT_EMAIL_FROM:-}
   PGCRYPTO_KEY: ${PGCRYPTO_KEY:?set PGCRYPTO_KEY}
   ADMIN_WA_NUMBERS: ${ADMIN_WA_NUMBERS:-}
   ADMIN_ALERT_TEMPLATE: ${ADMIN_ALERT_TEMPLATE:-admin_alert}
@@ -126,6 +130,34 @@ services:
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
 
+  # Analytics (M3): Metabase on 127.0.0.1:3000 (reach it over Tailscale). Its own
+  # settings live in the "metabase" database; it reads citizen_bot only as the
+  # read-only metabase_ro user, which sees nothing but the analytics schema.
+  #   docker compose --profile analytics up -d metabase
+  #   docker compose run --rm metabase-setup        # dashboard (idempotent)
+  metabase:
+    image: metabase/metabase:v0.63.18.2
+    profiles: ["analytics"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: postgres
+      MB_DB_PORT: "5432"
+      MB_DB_DBNAME: metabase
+      MB_DB_USER: ${POSTGRES_USER:-bot}
+      MB_DB_PASS: ${POSTGRES_PASSWORD}
+      MB_ANON_TRACKING_ENABLED: "false"
+      MB_CHECK_FOR_UPDATES: "false"
+      MB_LOAD_SAMPLE_CONTENT: "false"
+      MB_SITE_LOCALE: en
+      JAVA_TIMEZONE: Asia/Kolkata
+      JAVA_OPTS: -Xmx1g
+    ports:
+      - "127.0.0.1:${METABASE_HOST_PORT:-3000}:3000"
+
   # Office machine: outbound-only Cloudflare Tunnel -> caddy (no inbound ports, no static IP).
   cloudflared:
     image: cloudflare/cloudflared:2025.9.1
@@ -165,7 +197,20 @@ services:
       PGDATABASE: citizen_bot
       ADMIN_WA_NUMBERS: ${ADMIN_WA_NUMBERS:-}
       PHONE_HASH_SECRET: ${PHONE_HASH_SECRET}
+      METABASE_DB_PASSWORD: ${METABASE_DB_PASSWORD:-}
     entrypoint: ["bash", "scripts/db_migrate.sh"]
+
+  metabase-setup:
+    image: python:3.12-slim
+    profiles: ["jobs"]
+    working_dir: /app
+    volumes: [".:/app:ro"]
+    environment:
+      METABASE_URL: http://metabase:3000
+      MB_ADMIN_EMAIL: ${MB_ADMIN_EMAIL:?set MB_ADMIN_EMAIL}
+      MB_ADMIN_PASSWORD: ${MB_ADMIN_PASSWORD:?set MB_ADMIN_PASSWORD}
+      METABASE_DB_PASSWORD: ${METABASE_DB_PASSWORD:?set METABASE_DB_PASSWORD}
+    entrypoint: ["python3", "scripts/metabase_setup.py", "--verify"]
 
   import:
     image: n8nio/n8n:2.40.5
@@ -183,6 +228,10 @@ services:
       POSTGRES_DB: citizen_bot
       POSTGRES_USER: ${POSTGRES_USER:-bot}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
     entrypoint: ["sh", "scripts/n8n_import.sh"]
 
 volumes:
