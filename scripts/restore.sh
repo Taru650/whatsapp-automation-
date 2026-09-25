@@ -20,12 +20,21 @@ SUFFIX=${RESTORE_SUFFIX:-}
 
 dec() { openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:BACKUP_PASSPHRASE -in "$1"; }
 
+# Decrypt and validate EVERY dump before touching any database: a wrong
+# passphrase or a corrupt file must never cost us the live database.
+umask 077
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
 for db in ${BACKUP_DBS:-citizen_bot n8n}; do
   file="$DIR/$db-$STAMP.dump.enc"
   [[ -f "$file" ]] || { echo "missing $file" >&2; exit 1; }
+  dec "$file" > "$WORK/$db.dump" 2>/dev/null || { echo "cannot decrypt $file (wrong BACKUP_PASSPHRASE?) - nothing was changed" >&2; exit 1; }
+  $PG_RESTORE -l < "$WORK/$db.dump" > /dev/null 2>&1 || { echo "$file is not a valid dump - nothing was changed" >&2; exit 1; }
+done
+for db in ${BACKUP_DBS:-citizen_bot n8n}; do
   target="$db$SUFFIX"
   $PSQL -d postgres -v ON_ERROR_STOP=1 -q -c "drop database if exists \"$target\" with (force)" -c "create database \"$target\""
-  dec "$file" | $PG_RESTORE -d "$target" --no-owner --exit-on-error
-  echo "restored $file -> $target"
+  $PG_RESTORE -d "$target" --no-owner --exit-on-error < "$WORK/$db.dump"
+  echo "restored $DIR/$db-$STAMP.dump.enc -> $target"
 done
 echo "Done. For a real restore: docker compose run --rm import && docker compose up -d"

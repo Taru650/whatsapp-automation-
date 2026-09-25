@@ -61,4 +61,7 @@ SQL
 if BACKUP_PASSPHRASE=wrong scripts/restore.sh >/dev/null 2>&1; then
   echo "FAILED: restore worked with a wrong passphrase" >&2; exit 1
 fi
-echo "wrong passphrase correctly rejected"
+# ...and a failed restore must leave the existing database untouched
+[[ "$(psql -d citizen_bot_drill -XAt -c "select to_regclass('core.message_log') is not null" 2>/dev/null)" == t ]] \
+  || { echo "FAILED: a wrong passphrase dropped the target database" >&2; exit 1; }
+echo "wrong passphrase correctly rejected; existing database untouched"
