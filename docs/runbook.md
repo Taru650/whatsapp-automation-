@@ -3,6 +3,16 @@
 All commands run from the repository root on the host. `dc` = `docker compose`
 (add `-p bot-staging --env-file .env.staging` for staging).
 
+**Reaching the n8n editor and Metabase.** They listen on 127.0.0.1 only, so
+opening `http://<tailscale-ip>:5678` does **not** work, by design. From a
+laptop on the tailnet, tunnel the port over SSH:
+`ssh -N -L 5678:127.0.0.1:5678 -L 3000:127.0.0.1:3000 <user>@<machine-tailscale-name>`,
+then open `http://localhost:5678` (editor) or `http://localhost:3000`
+(Metabase). For viewers who shouldn't have SSH, publish Metabase to the
+tailnet only with `tailscale serve --bg --https=8443 http://127.0.0.1:3000`
+(check `tailscale serve --help` for the exact syntax of your version). Never
+change the compose port bindings to 0.0.0.0: Docker bypasses ufw.
+
 ## First deploy
 1. `cp .env.example .env` and fill it in. Store `N8N_ENCRYPTION_KEY`,
    `PGCRYPTO_KEY` and `PHONE_HASH_SECRET` in the office password safe. Losing
@@ -47,8 +57,8 @@ All commands run from the repository root on the host. `dc` = `docker compose`
 4. **Switch it on** once a sync has succeeded
    (`select status, rows, ts from core.sync_runs order by id desc limit 3`):
    `update core.services set enabled = (service_key = 'mela') where service_key in ('mela','echo');`
-5. **Sync now** (instead of waiting 10 minutes): in the n8n editor (over
-   Tailscale) open `sync-mela` → Execute workflow.
+5. **Sync now** (instead of waiting 10 minutes): in the n8n editor (SSH tunnel,
+   see the top) open `sync-mela` → Execute workflow.
 6. **Site pins:** see `docs/data-entry-guide.md` §7. Admin numbers come from
    `ADMIN_WA_NUMBERS`, so re-run `migrate` after changing them.
 7. **Mela Q&A text:** edit `data/history.md` → `dc run --rm migrate`. The
@@ -78,6 +88,19 @@ All commands run from the repository root on the host. `dc` = `docker compose`
   status, issues, enabled services, the last inbound message and errors in
   the last 15 minutes.
 
+## Abuse protection (anyone can POST to the webhook)
+Forged requests are dropped by the signature check, but each one still
+starts an n8n execution. A flood of them can fill the concurrency limit and
+slow real citizens' replies. Put a rate limit **in front of** the machine:
+- **Office machine (Cloudflare Tunnel):** Cloudflare dashboard → Security →
+  WAF → Rate limiting rules. Path equals `/webhook/wa`, method POST, about
+  **600 requests / 10 s per IP**, action Block. Meta's own deliveries are
+  far below that. [Likely] One rule is included in the free plan; check the
+  current plan limits.
+- **VPS:** point the DNS record at the VPS **through Cloudflare** (orange
+  cloud) and use the same rule. Without it the VPS has no flood protection.
+- Caddy already refuses request bodies over 256 KB.
+
 ## Backups (nightly) and restore
 - **Cron** (root, 02:30):
   `cd /opt/citizen-bot && BACKUP_PASSPHRASE=... BACKUP_REMOTE=gdrive:citizen-bot scripts/backup.sh`.
@@ -87,6 +110,11 @@ All commands run from the repository root on the host. `dc` = `docker compose`
 - **Restore:** `dc stop n8n && BACKUP_PASSPHRASE=... scripts/restore.sh [stamp] && dc run --rm import && dc up -d`.
 - **Drill:** `tests/restore_drill.sh` restores into a scratch database and
   compares every table. It runs in CI; also run it once on the office machine.
+- `restore.sh` decrypts and validates every dump **before** dropping anything,
+  so a wrong passphrase or a corrupt file leaves the live database untouched.
+- The `metabase` database (dashboard, Metabase users) is not backed up.
+  `scripts/metabase_setup.py` rebuilds the dashboard; viewer accounts are
+  re-invited. Add `metabase` to `BACKUP_DBS` if you want it kept.
 
 ## Analytics (M3)
 **What exists**
@@ -115,7 +143,8 @@ All commands run from the repository root on the host. `dc` = `docker compose`
    dashboard and then **verifies** it: every card runs, no number-like values
    appear, and the connection can't read `core`. Re-run it after pulling a new
    version; it updates the cards in place.
-4. Open `http://<tailscale-ip>:3000` (never exposed publicly). Add viewers
+4. Open Metabase through the SSH tunnel or `tailscale serve` (see the top of
+   this runbook; never exposed publicly). Add viewers
    under Admin → People, in a group with **view-only** access to the "Citizen bot"
    collection and no native-query permission.
 

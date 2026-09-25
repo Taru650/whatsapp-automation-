@@ -198,8 +198,8 @@ The runbook procedure takes about 1 hour. The named technical owner decides; the
     - POST to Graph API
     - log the outbound message
     - retry once on 5xx/429
-13. **End turn** (Postgres: `core.end_turn(wa_hash, version, next_state, context, log)`). On a version conflict, re-run once from step 6.
-- **Error Trigger** (`core/08-error`). Sends the apology + menu to the citizen and an `admin_alert` with the execution ID.
+13. **End turn** (Postgres: `core.end_turn(wa_hash, version, next_state, context, log)`). On a version conflict the reply has already gone out, so the turn is **not** re-run (that would send it twice). The conflict is recorded on the inbound row (`error = 'version_conflict'`) and the concurrent turn's state stands.
+- **Error Trigger** (`core/08-error`). Sends an `admin_alert` with the execution ID. A failing *service* already gets the citizen an apology through the router's "Service Failed" path. For a failure in the router itself (e.g. the database is down), the Error Trigger has no way to know who the citizen was, so that citizen gets no reply. The health monitor covers that case.
 
 ### 3.2 Service contract
 ```
@@ -411,7 +411,10 @@ control: Sanitation & Water | … | allday_name: Shri Nikhil Kumar, AE PHED Chha
 | Two sites at about the same distance | Both are shown; the list is sorted by distance, then `sort` |
 
 **Privacy:**
-- The citizen's latitude/longitude are **used in memory only and never stored**.
+- The citizen's latitude/longitude are **never stored** in the bot's database or logs.
+- One exception, found in the audit: when an n8n execution **fails**, n8n keeps that execution's full data for debugging (`EXECUTIONS_DATA_SAVE_ON_ERROR=all`), and that data includes the webhook body (the phone number and any shared location).
+  - This data is deleted after 72 h (`EXECUTIONS_DATA_MAX_AGE`) and is visible only in the n8n editor.
+  - Set `EXECUTIONS_DATA_SAVE_ON_ERROR=none` if that is not acceptable, at the cost of harder debugging.
 - `message_log` records `kind=location`, the category, and a distance bucket (<250 m, <500 m, <1 km, <2 km, more) for analytics.
 - The privacy notice mentions location use.
 
@@ -543,7 +546,7 @@ Effort is in developer-days for 1 developer, plus a part-time data/ops owner on 
 - LLM routing ≥90%, with 0 invented numbers; the 30-line set includes 8 "near me" phrasings in Hindi, Hinglish and English.
 - Near me: for 10 test origins, the returned top-1 matches a hand-checked nearest site. Directions links open walking navigation to the right point on Android and iPhone. Origins outside the radius, no-coordinate categories, and the landmark fallback behave as §6.1a says.
 - Admin capture: a non-admin gets "not allowed" for `mela:adm:*`; a capture survives the next 10-min sync; a sheet-typed value overrides it.
-- No citizen latitude/longitude appears in `message_log`, the n8n execution data, or the DB (grep check).
+- No citizen latitude/longitude appears in `message_log` or anywhere else in the DB (grep check). Failed n8n executions are the documented 72-hour exception (§6.1a privacy).
 - The data owner signs off that the staging answers match the sheet.
 
 ### M2: Go-live readiness: week 6, ~4 dev-days

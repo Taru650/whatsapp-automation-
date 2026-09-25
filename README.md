@@ -68,6 +68,7 @@ npm run test:flow                  # 36 end-to-end scenarios through the live n8
 python3 tests/run_mela_routing_eval.py   # free-text routing accuracy (LLM part needs a real key)
 python3 tests/load_test.py --rate 6 --duration 60   # capacity (docs/go-live.md §1)
 tests/restore_drill.sh                   # backup -> restore -> compare every table -> purge the copy
+CADDY=caddy tests/caddy_probe.sh         # ingress: only webhook/health paths get through
 scripts/dev_up.sh stop
 ```
 

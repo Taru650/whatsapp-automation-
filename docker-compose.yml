@@ -11,7 +11,8 @@
 #   docker compose stop n8n && docker compose run --rm import && docker compose up -d n8n
 #
 # Only Caddy is reachable from outside, and it forwards nothing but the webhook
-# paths. The n8n editor, Postgres and Metabase stay on 127.0.0.1 (reach them over Tailscale).
+# paths. The n8n editor, Postgres and Metabase stay on 127.0.0.1 (reach them with an SSH
+# tunnel over Tailscale, see docs/runbook.md; binding them to 0.0.0.0 would bypass ufw).
 
 x-n8n-env: &n8n-env
   # n8n's own storage
@@ -130,7 +131,7 @@ services:
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
 
-  # Analytics (M3): Metabase on 127.0.0.1:3000 (reach it over Tailscale). Its own
+  # Analytics (M3): Metabase on 127.0.0.1:3000 (SSH tunnel / tailscale serve). Its own
   # settings live in the "metabase" database; it reads citizen_bot only as the
   # read-only metabase_ro user, which sees nothing but the analytics schema.
   #   docker compose --profile analytics up -d metabase
