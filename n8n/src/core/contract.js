@@ -32,6 +32,17 @@ function validateServiceOutput(out, prefix) {
   }
   if (out.context != null && (typeof out.context !== 'object' || Array.isArray(out.context))) errors.push('context must be an object');
   if (out.done != null && typeof out.done !== 'boolean') errors.push('done must be boolean');
+  // log: { subtype?, resolved?, detail?, llm_tokens?, unanswered_reason? } feeds analytics
+  const log = out.log;
+  if (log != null) {
+    if (typeof log !== 'object' || Array.isArray(log)) errors.push('log must be an object');
+    else {
+      for (const k of ['subtype', 'detail', 'unanswered_reason']) {
+        if (log[k] != null && (typeof log[k] !== 'string' || log[k].length > 64)) errors.push(`log.${k} must be a string of at most 64 chars`);
+      }
+      if (log.llm_tokens != null && !(Number.isInteger(log.llm_tokens) && log.llm_tokens >= 0)) errors.push('log.llm_tokens must be a non-negative integer');
+    }
+  }
   return errors;
 }
 

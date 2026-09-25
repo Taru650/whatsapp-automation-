@@ -85,6 +85,18 @@ test('finalize: welcome on first contact, feedback once per session, end params'
   assert.equal(rl.end, null);
 });
 
+test('service log fields reach the turn record (analytics)', () => {
+  const d = afterLlm(decideTurn(item({ kind: 'text', text: 'kab tak' }), turn(), flags), { ok: true, service_key: 'echo', subtype: 'repeat', slots: {}, lang: 'en', confidence: 0.9, tokens: 40 });
+  const f = finalizeTurn(d, afterService(d, { messages: [{ type: 'text', body: 'x' }], next_state: null, context: {}, done: false,
+    log: { subtype: 'ask_unanswered', resolved: false, llm_tokens: 900, unanswered_reason: 'qa_no_answer', detail: 'gps:<1km' } }));
+  assert.equal(f.end.llm_tokens, 940, 'classifier + service tokens');
+  assert.equal(f.end.unanswered_reason, 'qa_no_answer');
+  assert.equal(f.end.detail, 'gps:<1km');
+  assert.equal(f.end.resolved, false);
+  const bad = afterService(d, { messages: [{ type: 'text', body: 'x' }], log: { llm_tokens: -1, detail: 'x'.repeat(65) } });
+  assert.equal(bad.log.subtype, 'error', 'bad log fields break the contract');
+});
+
 test('helpers', () => {
   assert.deepEqual(splitContext({ a: 1, __core: { x: 1 } }), { service: { a: 1 }, core: { x: 1 } });
   assert.deepEqual(splitContext(null), { service: {}, core: {} });

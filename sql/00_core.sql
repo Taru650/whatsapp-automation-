@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS core.message_log (
     error        text,
     ts           timestamptz NOT NULL DEFAULT now()
 );
+-- M3: a service-defined analytics tag, e.g. near-me 'gps:<500m' (never a location).
+ALTER TABLE core.message_log ADD COLUMN IF NOT EXISTS detail text;
 CREATE INDEX IF NOT EXISTS message_log_ts_idx ON core.message_log (ts);
 CREATE INDEX IF NOT EXISTS message_log_service_ts_idx ON core.message_log (service_key, ts);
 CREATE INDEX IF NOT EXISTS message_log_rate_idx ON core.message_log (wa_hash, ts) WHERE direction = 'in';
@@ -372,7 +374,7 @@ BEGIN
 END $$;
 
 -- p: {wa_hash, version, state, context, in_msg_id, service_key, subtype, via, resolved,
---     llm_tokens, latency_ms, set_lang, feedback_rating, unanswered_reason, text}
+--     llm_tokens, latency_ms, set_lang, feedback_rating, unanswered_reason, text, detail}
 CREATE OR REPLACE FUNCTION core.rpc_end_turn(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql AS $$
 DECLARE ok boolean;
@@ -395,6 +397,9 @@ BEGIN
                         coalesce(p->'context', '{}'::jsonb), p->>'in_msg_id', p->>'service_key',
                         p->>'subtype', p->>'via', (p->>'resolved')::boolean,
                         (p->>'llm_tokens')::int, (p->>'latency_ms')::int);
+    IF p->>'detail' IS NOT NULL THEN
+        UPDATE core.message_log SET detail = left(p->>'detail', 64) WHERE wa_msg_id = p->>'in_msg_id';
+    END IF;
     IF NOT ok THEN
         UPDATE core.message_log SET error = 'version_conflict' WHERE wa_msg_id = p->>'in_msg_id';
     END IF;

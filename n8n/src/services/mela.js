@@ -382,6 +382,14 @@ function askLocation(req, snap, cat) {
   };
 }
 
+function distanceBucket(m) {
+  if (m < 250) return '<250m';
+  if (m < 500) return '<500m';
+  if (m < 1000) return '<1km';
+  if (m < 2000) return '<2km';
+  return '2km+';
+}
+
 function nearestScreen(req, snap, origin, cats, fromLandmark) {
   const lang = req.lang;
   const s = snap.settings || {};
@@ -391,7 +399,7 @@ function nearestScreen(req, snap, origin, cats, fromLandmark) {
     const cat = cats[0];
     const r = categoryScreen(req, snap, cat, false);
     r.messages.unshift({ type: 'text', body: melaT(lang, 'You seem to be outside the Mela area. Here is the full list:', 'आप मेला क्षेत्र से बाहर लगते हैं। पूरी सूची:') });
-    r.log = { subtype: 'near_outside', resolved: true };
+    r.log = { subtype: 'near_outside', resolved: true, detail: 'gps:outside' };
     return r;
   }
   const sh = currentShift(snap, req.now_ist);
@@ -415,7 +423,9 @@ function nearestScreen(req, snap, origin, cats, fromLandmark) {
   msgs.push({ type: 'location', lat: nearestOverall.p.lat, lon: nearestOverall.p.lon, name: placeName(nearestOverall.p, lang), address: placeLocation(nearestOverall.p, lang) });
   const buttons = single ? [{ id: `mela:cat:${cats[0]}`, title: melaT(lang, '📋 See all', '📋 सभी देखें') }, menuBtn(lang)] : [menuBtn(lang)];
   msgs.push({ type: 'buttons', body: melaT(lang, 'Anything else?', 'और कुछ?'), buttons });
-  return melaOut(msgs, { log: { subtype: single ? `near_${cats[0]}` : 'near_all', resolved: true } });
+  // analytics: how far citizens are from help (bucketed; the location itself is never logged)
+  const detail = `${fromLandmark ? 'landmark' : 'gps'}:${distanceBucket(nearestOverall.d)}`;
+  return melaOut(msgs, { log: { subtype: single ? `near_${cats[0]}` : 'near_all', resolved: true, detail } });
 }
 
 // ---- admin: on-site coordinate capture -------------------------------------------------------
@@ -612,13 +622,13 @@ function melaQaFinish(req, snap, resp) {
   const buttons = [{ id: 'mela:ask', title: melaT(lang, '❓ Ask another', '❓ और सवाल') }, menuBtn(lang)];
   if (data && data.answerable && data.answer) {
     return { messages: [{ type: 'buttons', body: String(data.answer).slice(0, 1000), buttons }], next_state: null, context: {}, done: true,
-      log: { subtype: 'ask', resolved: true }, llm_tokens: tokens };
+      log: { subtype: 'ask', resolved: true, llm_tokens: tokens } };
   }
   const helpline = helplineLines(snap || {}, lang);
   const body = melaT(lang, "Sorry, I don't have that information. Please choose from the menu" + (helpline ? ` or call the control room.\n${helpline}` : '.'),
     'माफ़ कीजिए, यह जानकारी मेरे पास नहीं है। कृपया मेनू से चुनें' + (helpline ? ` या कंट्रोल रूम को फ़ोन करें।\n${helpline}` : '।'));
   return { messages: [{ type: 'buttons', body, buttons }], next_state: null, context: {}, done: false,
-    log: { subtype: 'ask_unanswered', resolved: false }, llm_tokens: tokens };
+    log: { subtype: 'ask_unanswered', resolved: false, llm_tokens: tokens, unanswered_reason: resp && resp.error ? 'qa_error' : 'qa_no_answer' } };
 }
 
 if (typeof module !== 'undefined') {

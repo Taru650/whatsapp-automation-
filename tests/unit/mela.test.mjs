@@ -160,10 +160,11 @@ test('near me: location request, nearest three, outside the Mela, landmark fallb
   assert.match(body(res), /destination=25\.6922,85\.1752&travelmode=walking/);
   assert.doesNotMatch(body(res), /origin=/, 'citizen coordinates never in a link');
   assert.equal(res.messages[1].type, 'location');
+  assert.equal(res.log.detail, 'gps:<250m', 'distance bucket logged, never the location');
   const far = ok(melaHandle(req({ kind: 'location', lat: 25.6, lon: 85.1 }, { state: 'mela.await_location', context: { near_cat: 'thana' } }), s));
-  assert.match(body(far), /outside the Mela area/);
+  assert.match(body(far), /outside the Mela area/); assert.equal(far.log.detail, 'gps:outside');
   const land = ok(melaHandle(req({ kind: 'text', text: 'kali ghat' }, { state: 'mela.await_location', context: { near_cat: 'thana' } }), s));
-  assert.match(body(land), /Nearest police station/);
+  assert.match(body(land), /Nearest police station/); assert.match(land.log.detail, /^landmark:/);
   const miss = ok(melaHandle(req({ kind: 'text', text: 'xyzzy' }, { state: 'mela.await_location', context: { near_cat: 'thana' } }), s));
   assert.equal(miss.messages[0].type, 'location_request');
   const plain = ok(melaHandle(req({ kind: 'location', lat: 25.6921, lon: 85.1751 }), s));
@@ -221,10 +222,12 @@ test('Q&A request and answer handling', () => {
   assert.deepEqual(r.output_config.format.schema.required, ['answerable', 'answer']);
   const resp = (d) => ({ stop_reason: 'end_turn', usage: { input_tokens: 900, output_tokens: 80 }, content: [{ type: 'text', text: JSON.stringify(d) }] });
   const good = ok(melaQaFinish(req({}), s, resp({ answerable: true, answer: 'It is at Harihar Kshetra.' })));
-  assert.equal(body(good), 'It is at Harihar Kshetra.'); assert.equal(good.llm_tokens, 980); assert.equal(good.done, true);
+  assert.equal(body(good), 'It is at Harihar Kshetra.'); assert.equal(good.log.llm_tokens, 980); assert.equal(good.done, true);
   const bad = ok(melaQaFinish(req({}, { lang: 'hi' }), s, resp({ answerable: false, answer: '' })));
   assert.match(body(bad), /जानकारी मेरे पास नहीं/); assert.match(body(bad), /06158-221084/);
-  assert.equal(ok(melaQaFinish(req({}), s, { error: { message: 'timeout' } })).log.resolved, false);
+  assert.equal(bad.log.unanswered_reason, 'qa_no_answer'); assert.equal(bad.log.llm_tokens, 980);
+  const err = ok(melaQaFinish(req({}), s, { error: { message: 'timeout' } }));
+  assert.equal(err.log.resolved, false); assert.equal(err.log.unanswered_reason, 'qa_error');
 });
 
 test('empty data never crashes and never dead-ends', () => {
