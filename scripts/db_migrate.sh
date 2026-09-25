@@ -17,6 +17,21 @@ if [[ -n "${ADMIN_WA_NUMBERS:-}" && -n "${PHONE_HASH_SECRET:-}" ]]; then
   echo "admins updated"
 fi
 
+# Read-only login for Metabase (sees only the analytics schema; sql/20_analytics.sql).
+if [[ -n "${METABASE_DB_PASSWORD:-}" ]]; then
+  # Metabase's own settings DB (init-databases.sql only runs on a fresh volume)
+  psql ${DATABASE_URL:+"$DATABASE_URL"} -X -q -d postgres -tc "select 1 from pg_database where datname = 'metabase'" | grep -q 1 \
+    || psql ${DATABASE_URL:+"$DATABASE_URL"} -X -q -d postgres -c "create database metabase"
+  cat <<'SQL' | PGOPTIONS="-c client_min_messages=warning" psql ${DATABASE_URL:+"$DATABASE_URL"} -X -q -v ON_ERROR_STOP=1 -o /dev/null -v pw="$METABASE_DB_PASSWORD"
+select format(case when exists (select 1 from pg_roles where rolname = 'metabase_ro')
+                   then 'alter role metabase_ro login password %L'
+                   else 'create role metabase_ro login password %L' end, :'pw') \gexec
+grant analytics_ro to metabase_ro;
+alter role metabase_ro set search_path = analytics;
+SQL
+  echo "metabase_ro login ready"
+fi
+
 # Approved general-information text for Mela Q&A answers.
 if [[ -f data/history.md ]]; then
   echo "insert into svc_mela.qa_context (id, content) values (1, :'content')

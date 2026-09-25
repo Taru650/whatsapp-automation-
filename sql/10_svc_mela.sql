@@ -174,6 +174,29 @@ BEGIN
     RETURN jsonb_build_object('applied', n);
 END $$;
 
+-- One line for the 08:00 daily report (analytics.daily_report calls
+-- svc_<key>.digest() for every enabled service that defines one).
+CREATE OR REPLACE FUNCTION svc_mela.digest() RETURNS text
+LANGUAGE sql STABLE AS $$
+    WITH pins AS (
+        SELECT p.category, count(*) AS total,
+               count(*) FILTER (WHERE coalesce(p.lat, c.lat) IS NOT NULL) AS pinned
+        FROM svc_mela.places p LEFT JOIN svc_mela.place_coords c ON c.place_id = p.id
+        GROUP BY p.category
+    ), today AS (
+        SELECT count(*) AS n FROM svc_mela.events WHERE date = (now() AT TIME ZONE 'Asia/Kolkata')::date
+    ), sync AS (
+        SELECT max(ts) AS last_ok FROM core.sync_runs WHERE service_key = 'mela' AND status = 'ok'
+    )
+    SELECT format('Mela: sites with map pins %s/%s (%s) · programme items today: %s · last good sheet sync: %s',
+                  coalesce(sum(pinned), 0), coalesce(sum(total), 0),
+                  coalesce(string_agg(format('%s %s/%s', category, pinned, total), ', ' ORDER BY category), 'no sites'),
+                  (SELECT n FROM today),
+                  coalesce((SELECT to_char(last_ok AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:MI') FROM sync), 'never')
+                  || CASE WHEN (SELECT last_ok FROM sync) < now() - interval '1 hour' THEN ' ⚠ STALE' ELSE '' END)
+    FROM pins
+$$;
+
 -- Sync bookkeeping (generic, lives in core): record a run and say whether to
 -- alert - failed runs alert at most once per hour for the same set of errors.
 CREATE OR REPLACE FUNCTION core.record_sync(p jsonb) RETURNS jsonb
