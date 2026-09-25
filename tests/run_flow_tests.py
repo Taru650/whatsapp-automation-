@@ -650,6 +650,8 @@ def mela_admin_pins_site_then_citizen_finds_nearest():
     h = hash_of(u)
     assert "25.6921" not in json.dumps(sql(f"select text, state from core.message_log where wa_hash='{h}'")), "citizen location never stored"
     assert "25.6921" not in json.dumps(sql(f"select context from core.sessions where wa_hash='{h}'"))
+    assert scalar(f"select detail from core.message_log where wa_hash='{h}' and kind='location'") == "gps:<250m", \
+        "near-me distance bucket logged for analytics"
 
 
 @scenario(services=MELA_ONLY)
@@ -677,6 +679,10 @@ def mela_question_answered_from_approved_text():
     send(u, m_text(u, "unknownq what is the ticket price?"))
     out = wait_out(u, 6)
     assert "06158-221084" in body_of(out[5]), "unknown -> helpline, never a guess: " + body_of(out[5])
+    h = hash_of(u)
+    assert scalar(f"select reason from core.unanswered where wa_hash='{h}'") == "qa_no_answer", "unanswered question kept for review"
+    assert int(scalar(f"select count(*) from core.message_log where wa_hash='{h}' and subtype like 'ask%' and llm_tokens > 0")) == 2, \
+        "Q&A tokens counted"
 
 
 @scenario(services=MELA_ONLY)
@@ -696,6 +702,56 @@ def mela_hindi_citizen_gets_hindi():
 def mela_no_payload_rejected_by_meta_limits():
     bad = [c for c in captured() if c["errors"]]
     assert not bad, bad[:2]
+
+
+# ------------------------------------------------------------- M3: ops ---
+SMTP_HTTP = os.environ.get("SMTP_MOCK_URL", "http://127.0.0.1:8085")
+
+
+def run_workflow(workflow_id, inp=None):
+    s, b = http("POST", f"{N8N}/webhook/test/service", {"workflow_id": workflow_id, "input": inp or {}})
+    assert s == 200, (s, b)
+    return json.loads(b)
+
+
+@scenario(services=MELA_ONLY)
+def daily_report_reaches_admins_on_whatsapp_and_email():
+    run_sync(clean_sheet())
+    http("POST", f"{SMTP_HTTP}/__reset", {})
+    for _ in range(2):
+        u = user()
+        send(u, m_text(u, "hi"))
+        wait_out(u, 2)
+        send(u, m_list(u, "mela:cat:thana", "Police"))
+        wait_out(u, 3)
+    admin_send(m_text(ADMIN, "pin status"))       # admin traffic is not counted
+    wait_out(ADMIN, 1)
+    today = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 5.5 * 3600))
+    n0 = len(out_to(ADMIN))
+    r = run_workflow("CoreReport000001", {"day": today})
+    assert "Citizens: " in r["text"] and "thana" in r["text"] and "Mela: sites with map pins" in r["text"], r["text"]
+    assert "\n" not in r["line"] and len(r["line"]) <= 900, r["line"]
+    assert r["emailed"] is True, r
+    out = wait_out(ADMIN, n0 + 1)
+    tpl = out[-1]["payload"]
+    assert tpl["type"] == "template" and tpl["template"]["name"] == "admin_alert", summary(out[-1])
+    param = tpl["template"]["components"][0]["parameters"][0]["text"]
+    assert param.startswith("Citizen bot report for") and "\n" not in param, param
+    mails = json.loads(http("GET", f"{SMTP_HTTP}/__mails")[1])
+    assert len(mails) == 1 and "dm-office@example.test" in mails[0]["to"][0], mails
+    assert "Citizen bot daily report" in mails[0]["data"], mails[0]["data"][:300]
+    assert int(scalar(f"select count(*) from analytics.daily_archive where day = '{today}'")) == 1, "day archived"
+    rec = json.loads(scalar(f"select analytics.reconcile('{today}')"))
+    assert rec["ok"] and rec["admin_inbound"] >= 1, rec
+
+
+@scenario(services=MELA_ONLY)
+def nightly_purge_runs_and_reports():
+    sql("insert into core.message_log (wa_msg_id, wa_hash, direction, kind, ts) "
+        "values ('wamid.OLD1', 'purgetest', 'in', 'text', now() - interval '400 days')")
+    r = run_workflow("CorePurge0000001")
+    assert r["ok"] and r["purged"]["retention_days"] == 180 and r["purged"]["message_log"] >= 1, r
+    assert scalar("select count(*) from core.message_log where wa_msg_id = 'wamid.OLD1'") == "0"
 
 
 # ---------------------------------------------------------------- runner ---

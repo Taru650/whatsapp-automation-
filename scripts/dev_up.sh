@@ -17,7 +17,7 @@ mkdir -p "$RUN"
 N8N_VERSION=$(node -p "require('./package.json').config.n8nVersion")
 
 stop() {
-  for p in n8n graph anthropic sheets redis $(seq -f 'worker%g' 1 9); do
+  for p in n8n graph anthropic sheets smtp redis $(seq -f 'worker%g' 1 9); do
     [[ -f "$RUN/$p.pid" ]] && kill "$(cat "$RUN/$p.pid")" 2>/dev/null || true
     rm -f "$RUN/$p.pid"
   done
@@ -44,6 +44,7 @@ scripts/db_migrate.sh
 python3 tests/mocks/graph_api.py --port 8081 & echo $! > "$RUN/graph.pid"
 python3 tests/mocks/anthropic.py --port 8082 & echo $! > "$RUN/anthropic.pid"
 python3 tests/mocks/sheets.py --port 8083 & echo $! > "$RUN/sheets.pid"
+python3 tests/mocks/smtp.py --port 8084 --http-port 8085 & echo $! > "$RUN/smtp.pid"
 
 # Throwaway Google service-account key for the Sheets mock (tests only).
 if [[ -z "${GOOGLE_SA_JSON:-}" && "${ENV:-}" == "test" ]]; then

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import * as core from '../n8n/src/workflows/core.mjs';
 import * as services from '../n8n/src/workflows/services.mjs';
+import * as ops from '../n8n/src/workflows/ops.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'n8n', 'workflows');
@@ -18,6 +19,8 @@ const targets = {
   'core/core-03-admin-alert.json': core.alert,
   'core/core-04-health.json': core.health,
   'core/core-08-error.json': core.error,
+  'core/core-09-purge.json': ops.purge,
+  'core/core-85-daily-report.json': ops.dailyReport,
   'core/core-99-test-harness.json': core.harness,
   'services/svc-echo.json': services.echo,
   'services/svc-template.json': services.template,

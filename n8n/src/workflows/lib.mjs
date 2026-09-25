@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export const PG_CREDENTIAL = { postgres: { id: 'PgCitizenBot0001', name: 'citizen_bot' } };
+export const SMTP_CREDENTIAL = { smtp: { id: 'SmtpReport000001', name: 'report_smtp' } };
 
 export const IDS = {
   router: 'CoreRouter000001',
@@ -16,6 +17,8 @@ export const IDS = {
   error: 'CoreError0000001',
   harness: 'CoreHarness00001',
   health: 'CoreHealth000001',
+  report: 'CoreReport000001',
+  purge: 'CorePurge0000001',
   echo: 'SvcEcho000000001',
   template: 'SvcTemplate00001',
   mela: 'SvcMela000000001',
