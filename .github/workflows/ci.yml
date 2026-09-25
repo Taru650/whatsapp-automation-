@@ -1,0 +1,78 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16.13
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: citizen_bot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: citizen_bot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Generated workflows up to date + unit tests
+        run: npm run check
+
+      - name: Migrate DB (twice, to prove idempotency) + SQL tests + template checks
+        run: |
+          set -a; source tests/test.env; set +a
+          export METABASE_DB_PASSWORD=ci-metabase-ro
+          scripts/db_migrate.sh && scripts/db_migrate.sh
+          npm run test:sql
+
+      - name: Backup -> restore drill
+        run: tests/restore_drill.sh
+
+      - name: Mela free-text routing (keyword path; LLM cases are skipped without a key)
+        run: python3 tests/run_mela_routing_eval.py
+
+      - name: Install n8n (pinned)
+        run: npm install -g "n8n@$(node -p "require('./package.json').config.n8nVersion")"
+
+      - name: Start mocks + import workflows + start n8n
+        run: N8N_BIN=n8n scripts/dev_up.sh
+
+      - name: Flow tests
+        run: |
+          set -a; source tests/test.env; set +a
+          npm run test:flow
+
+      # Ingress: only webhook + health paths get through Caddy (the test harness is
+      # published in CI, so this proves it is unreachable from outside)
+      - name: Caddy path filter probe
+        run: |
+          curl -sSfL https://github.com/caddyserver/caddy/releases/download/v2.10.0/caddy_2.10.0_linux_amd64.tar.gz | tar -xz caddy
+          CADDY=./caddy tests/caddy_probe.sh
+
+      # M3 gate: every dashboard card runs and nothing number-like is visible;
+      # the Metabase connection cannot read the core schema.
+      - name: Metabase dashboard provisioning + privacy verify
+        run: |
+          docker run -d --name metabase --network host -e MB_JETTY_PORT=3000 -e MB_LOAD_SAMPLE_CONTENT=false \
+            -e MB_ANON_TRACKING_ENABLED=false metabase/metabase:v0.63.18.2
+          MB_ADMIN_EMAIL=ci@example.test MB_ADMIN_PASSWORD=ci-Metabase-1 METABASE_DB_PASSWORD=ci-metabase-ro \
+            ANALYTICS_DB_HOST=127.0.0.1 ANALYTICS_DB_PORT=5432 python3 scripts/metabase_setup.py --verify --wait 420
+
+      - name: n8n log
+        if: failure()
+        run: tail -n 300 .dev/n8n.log || true

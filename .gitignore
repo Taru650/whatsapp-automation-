@@ -5,3 +5,6 @@ __pycache__/
 n8n_data/
 postgres_data/
 ollama_data/
+.dev/
+n8n/exported/
+node_modules/
