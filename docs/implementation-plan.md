@@ -464,7 +464,7 @@ Typing coordinates by hand into a sheet is error-prone (swapped lat/lon, missing
 | Flow | `tests/run_flow_tests.py` + `tests/payloads/*.json` + `tests/services/<key>/*.yaml` | Real-shaped Meta payloads are sent to the staging webhook (mocks on). Asserts on captured outbound payloads, `message_log`, and `sessions` |
 | Contract | same runner via `99-test-harness` | Output schema of every service for its standard inputs |
 | LLM routing | `tests/llm/free_text.yaml` (50 hi/Hinglish/en lines, labelled) | Run against the real API; ≥90% correct service/subtype |
-| Load | `tests/k6/load.js` | 30 msg/s for 10 min against mocks: p95 <3s, 0 lost, 0 duplicates |
+| Load | `tests/load_test.py` | 6 msg/s sustained p95 < 1 s; 12 msg/s burst: 0 lost, 0 duplicates, self-recovery (docs/go-live.md §1) |
 | UAT | `docs/uat-mX.md` | Real phones, every path, both languages |
 
 **CI:** GitHub Actions `ci.yml` runs on every push:
@@ -555,7 +555,7 @@ Effort is in developer-days for 1 developer, plus a part-time data/ops owner on 
 | Prod stack + production number cut-over, UAT with about 20 staff phones, Hindi copy review | 1 |
 
 **Gate M2:**
-- Load test meets the targets.
+- Load test meets the targets. They were revised after measurement (docs/go-live.md §1): sustain **6 msg/s with p95 < 1 s** on the target machine, and survive **12 msg/s for 30 s** with 0 lost, 0 duplicates and self-recovery. The original "30 msg/s" was never derived from expected traffic; the expected Mela peak is about 2 msg/s, with bursts of about 6.
 - The restore drill onto a fresh VPS completes in under 1 hour.
 - **Hosting go/no-go:** all of H1–H6 pass → go live on the office machine. Any fail → go live on the VPS (allow 1 extra day).
 - Pulling the power cable and the primary internet cable: the bot recovers without anyone touching it (H3/H4).

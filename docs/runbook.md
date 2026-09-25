@@ -67,12 +67,33 @@ All commands run from the repository root on the host. `dc` = `docker compose`
 | Unanswered questions | `... -c "select ts, reason, text from core.unanswered order by id desc limit 50"` |
 | Emergency UI hotfix | fix in the UI, then `scripts/n8n_export.sh`, port it to `n8n/src`, rebuild, redeploy |
 
-## Backups (nightly cron)
-```bash
-dc exec -T postgres pg_dumpall -U bot | gzip > /backup/bot-$(date +%F).sql.gz   # then rclone to off-site
-```
-Keep 14 days locally plus the off-site copy. Restore is the first half of the
-section below.
+## Monitoring
+- **UptimeRobot, HTTP monitor:** `https://PUBLIC_HOST/webhook/health` every 5 min.
+  Down means citizens get no answers.
+- **UptimeRobot, keyword monitor:** the same URL, alerting when `"status":"ok"`
+  is missing. This means the Mela sheet hasn't synced for over an hour, so the
+  bot is answering from stale data.
+- **Direct check:** `curl -s https://PUBLIC_HOST/webhook/health` shows the
+  status, issues, enabled services, the last inbound message and errors in
+  the last 15 minutes.
+
+## Backups (nightly) and restore
+- **Cron** (root, 02:30):
+  `cd /opt/citizen-bot && BACKUP_PASSPHRASE=... BACKUP_REMOTE=gdrive:citizen-bot scripts/backup.sh`.
+  This dumps both databases and `.env`, encrypted, keeps 14 days, and copies
+  them off-site.
+- **Keep `BACKUP_PASSPHRASE` in the password safe**, not only on this machine.
+- **Restore:** `dc stop n8n && BACKUP_PASSPHRASE=... scripts/restore.sh [stamp] && dc run --rm import && dc up -d`.
+- **Drill:** `tests/restore_drill.sh` restores into a scratch database and
+  compares every table. It runs in CI; also run it once on the office machine.
+
+## Capacity / queue mode
+- One n8n instance handles about 6–7 msg/s (docs/go-live.md §1). If traffic
+  approaches that, or the office machine's load test fails:
+  1. Set `EXECUTIONS_MODE=queue` in `.env`.
+  2. `dc --profile tunnel --profile scale up -d --scale n8n-worker=3`
+- Queue mode keeps n8n's data in Postgres (already the case in compose) and
+  adds Redis plus workers.
 
 ## Move to the VPS (plan §2.4: go/no-go failed, or a mid-Mela trigger)
 1. Buy the VPS (Hostinger KVM or similar, 2+ vCPU / 8 GB, India DC if offered).
