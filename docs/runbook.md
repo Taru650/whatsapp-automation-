@@ -31,16 +31,27 @@ change the compose port bindings to 0.0.0.0: Docker bypasses ufw.
 6. UptimeRobot: monitor `https://PUBLIC_HOST/healthz` every 5 minutes, with
    SMS alerts to the technical owner.
 
-## Real-phone check on the Meta test number (10 minutes; M0 gate item)
+## Real-phone check on the Meta test number (15 minutes; M1 gate item)
+Prerequisite: the `mela` service must be enabled and have synced at least
+once from a real or sample Google Sheet (see "Sonpur Mela service" above).
+With no data, screens still work but say "no places/events found".
 1. Staging `.env.staging`: the test number's `WHATSAPP_PHONE_NUMBER_ID`, a
-   token, the App Secret, and `ENV=staging`. Add your phone as a test recipient
-   in Meta.
+   token, the App Secret, and `ENV=staging`. Add your phone as a test
+   recipient in Meta (WhatsApp → API Setup → "To" numbers).
 2. From your phone:
-   - send **hi** → expect the welcome notice, then the echo service menu
-   - type anything → expect "You said: …" plus "Was this helpful?"
-   - tap **👍** → expect "Thank you"
+   - send **hi** → expect the welcome notice, then the Mela menu (or the
+     screen it opens directly into, if `mela` is the only enabled service)
+   - tap **🚨 Control room** → expect the helpline number and officers on
+     duty for the current shift
+   - tap **👮 Police stations** → expect the thana list with the on-duty
+     in-charge and phone for right now
+   - type **"police near me"** → expect a location request, then (after you
+     share your location) the nearest thanas with a walking-directions link
+   - tap **❓ Ask a question** → type a Mela question in plain text → expect
+     an answer from the approved text, or the helpline (never a guess)
    - send a voice note → expect the "only typed messages" reply
    - send **english** / **हिंदी** → expect the language to change
+   - tap **👍** on any answer → expect "Thank you"
 3. `dc exec postgres psql -U bot citizen_bot -c "select direction, kind, service_key, state, error from core.message_log order by id desc limit 20"`.
    Expect no `error` values.
 
