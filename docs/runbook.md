@@ -3,6 +3,12 @@
 All commands run from the repository root on the host. `dc` = `docker compose`
 (add `-p bot-staging --env-file .env.staging` for staging).
 
+**Never run `docker compose` from a terminal that has sourced `tests/test.env`**
+(`set -a; source tests/test.env; set +a`, used for local SQL/flow tests).
+Shell-exported variables silently take priority over `.env`, so `docker
+compose` would use test credentials (`test-access-token`, etc.) instead of
+the real ones with no warning. Use a separate terminal for compose commands.
+
 **Reaching the n8n editor and Metabase.** They listen on 127.0.0.1 only, so
 opening `http://<tailscale-ip>:5678` does **not** work, by design. From a
 laptop on the tailnet, tunnel the port over SSH:

@@ -52,6 +52,53 @@ python3 tests/load_test.py --rate 6 --duration 300                 # must pass
 python3 tests/load_test.py --rate 12 --duration 30 --recovery      # 0 lost, recovers
 ```
 
+## 1a. Real-phone check (M1 gate item, `docs/runbook.md` § Real-phone check)
+
+**Done — 30 Sep 2026.** Run on Taru's Windows laptop (WSL2 + Docker Desktop),
+against the real, permanent WhatsApp number **+91 91359 90963 ("Saran Seva",
+Phone Number ID `1390286170826718`)**, not the Meta sandbox test number. This
+was a laptop rehearsal of the deploy steps, **not** the office machine —
+H1–H6 burn-in still has to run on the real dedicated machine separately.
+
+Exposed via a Cloudflare quick tunnel (no account) for the day, forced to
+`--protocol http2` — the default QUIC/UDP protocol dropped every few minutes
+on this network ("no recent network activity" timeouts), consistent with a
+short UDP NAT timeout. **Not representative of the office machine or the
+production named Cloudflare Tunnel**, which does not share this failure mode.
+
+**Checked and passed** (screenshots, `core.message_log`: 0 errors):
+| Runbook item | Result |
+|---|---|
+| "hi" → welcome + Mela menu | ✅ single-service rule opened Mela directly |
+| Control room card | ✅ helpline + emergency numbers (112/108) shown correctly |
+| Ask a question, no `ANTHROPIC_API_KEY` set | ✅ safe "don't have that information" fallback, not a guess |
+| Voice note | ✅ polite Hindi redirect + menu |
+| Language switch (english/हिंदी) | ✅ switched and stayed switched, all subsequent replies in Hindi |
+| "aaj ka program", no sheet data yet | ✅ "कार्यक्रम की सूची जल्द जारी की जाएगी" — correct no-data message, no invented schedule |
+| 👍/👎 feedback prompt shown | ✅ appeared after the control-room card |
+
+**Not testable today** (need Mela sheet data): thana/health/vet cards, 📍 near
+me, "Kali Ghat" landmark fallback, admin pin flow. Covered by UAT (§6) once
+real data is synced.
+
+**Two real bugs found and fixed during this run** (not laptop-specific):
+1. `.env.example`'s `WHATSAPP_ACCESS_TOKEN` guidance ("permanent System User
+   token, not the 24h test token") turned out to matter in practice — the
+   24-hour token from Meta's "API Setup → Try it out" quickstart was scoped to
+   Meta's own default sandbox number, not this WABA's real registered number,
+   and every send failed with `Unsupported request - method type: post`
+   (GraphMethodException). Fixed by generating a permanent token from a
+   System User with `whatsapp_business_messaging` + `whatsapp_business_management`
+   assigned to the WhatsApp asset. The old temporary token was then revoked.
+2. `docker compose` variable interpolation gives shell-exported variables
+   priority over `.env`. Running `set -a; source tests/test.env; set +a`
+   earlier in the same terminal session (done for the SQL/flow tests) silently
+   overrode `META_APP_SECRET`, `WHATSAPP_ACCESS_TOKEN`,
+   `WHATSAPP_PHONE_NUMBER_ID` and `WHATSAPP_VERIFY_TOKEN` back to their test
+   values for every later `docker compose` command in that shell, with no
+   warning. **Always run `docker compose` from a terminal that has never
+   sourced `tests/test.env`.**
+
 ## 2. Hosting go/no-go (plan §2.4). Decision date ≈ 3 Nov
 
 Burn-in: the staging stack runs 24×7 on the office machine from M1 start,
@@ -146,6 +193,7 @@ Y/N plus a better phrasing.
 
 | Item | Name | Date |
 |---|---|---|
+| Real-phone check (§1a) | Taru | 30 Sep 2026 |
 | Mela data owner: staging answers match the sheet | | |
 | Hindi copy reviewed | | |
 | UAT complete (20 phones) | | |
