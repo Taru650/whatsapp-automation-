@@ -80,8 +80,13 @@ LANGUAGE sql STABLE AS $$
             JOIN grievance.departments d ON d.department_id = c.department_id AND d.enabled), '[]'),
         'my_complaints', coalesce((SELECT jsonb_agg(jsonb_build_object(
                 'complaint_id', x.complaint_id, 'category_key', x.category_key, 'status', x.status,
-                'created_at', to_char(x.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI'),
-                'updated_at', to_char(x.updated_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI'))
+                -- 'DD Mon HH24:MI' (not 'YYYY-MM-DD HH24:MI'): the same format
+                -- core.health() already uses for this reason - a plain ISO
+                -- date-and-time bridges into a 10-digit run across the space,
+                -- which phone_guard.js correctly treats as an unregistered
+                -- phone number and blocks the whole message.
+                'created_at', to_char(x.created_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:MI'),
+                'updated_at', to_char(x.updated_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:MI'))
                 ORDER BY x.created_at DESC)
             FROM (SELECT * FROM grievance.complaints WHERE citizen_wa_hash = p_wa_hash ORDER BY created_at DESC LIMIT 20) x), '[]'),
         'geofence', jsonb_build_object(
