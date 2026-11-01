@@ -12,7 +12,15 @@ CREATE TABLE IF NOT EXISTS svc_complaint.id_counters (
 
 -- Atomic per-year sequence (INSERT ... ON CONFLICT DO UPDATE is a single,
 -- row-locking statement - same race-avoidance spirit as core.end_turn's
--- optimistic version check), formatted as SCB-<year>-<6 digits>.
+-- optimistic version check), formatted as SCB-<year>-C<5 digits>.
+--
+-- The "C" immediately before the sequence digits is deliberate, not
+-- decorative: n8n/src/core/phone_guard.js blocks any outbound digit run of
+-- 6-13 characters (it may include internal spaces/dots/hyphens) that isn't a
+-- registered number - exactly what a plain "SCB-2026-000123" would produce
+-- once the hyphen bridges "2026" and "000123" into one 10-digit run. The
+-- letter breaks that bridge, and keeping the sequence at 5 digits (not 6)
+-- means it can never self-trigger the guard either, bridged or not.
 CREATE OR REPLACE FUNCTION svc_complaint.next_complaint_id() RETURNS text
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -22,7 +30,7 @@ BEGIN
     INSERT INTO svc_complaint.id_counters (year, next_seq) VALUES (y, 2)
     ON CONFLICT (year) DO UPDATE SET next_seq = svc_complaint.id_counters.next_seq + 1
     RETURNING next_seq - 1 INTO seq;
-    RETURN format('SCB-%s-%s', y, lpad(seq::text, 6, '0'));
+    RETURN format('SCB-%s-C%s', y, lpad(seq::text, 5, '0'));
 END $$;
 
 -- Apply service side effects (one create_complaint effect per turn).
@@ -119,7 +127,15 @@ VALUES ('complaint', 'cmp', 'शिकायत दर्ज करें', 'Fil
         'Filing a tracked complaint/grievance about water supply, electricity, sanitation, roads, police, health, Mela food/water quality, lost & found, traffic/parking, veterinary/animal care, or any other civic issue; checking the status of an existing complaint.',
         'पानी, बिजली, सफ़ाई, सड़क, पुलिस, स्वास्थ्य, मेला भोजन/पानी, खोया-पाया, यातायात/पार्किंग, पशु चिकित्सा या किसी अन्य नागरिक समस्या की शिकायत दर्ज करना; मौजूदा शिकायत की स्थिति देखना।',
         '{"register": "file a new complaint/grievance", "status": "check status of an existing complaint", "my_complaints": "list my complaints"}',
-        ARRAY['complaint', 'complaints', 'shikayat', 'शिकायत', 'grievance', 'ticket', 'शिकायत दर्ज'],
+        -- 'scb'/'status'/'स्थिति' matter beyond the open-menu keywords above:
+        -- without one of these, typing a bare complaint id (e.g. "SCB-2026-
+        -- C00123") with no pending state matches no keyword, so the router
+        -- sends it to the LLM classifier instead of this service - and a
+        -- random id string is not something a classifier can be expected to
+        -- place. 'scb' (every id's fixed prefix) routes it here directly,
+        -- where complaintHandle's own id-lookup logic actually runs.
+        ARRAY['complaint', 'complaints', 'shikayat', 'शिकायत', 'grievance', 'ticket', 'शिकायत दर्ज',
+              'scb', 'status', 'स्थिति'],
         true)
 ON CONFLICT (service_key) DO UPDATE SET
     id_prefix = EXCLUDED.id_prefix, title_hi = EXCLUDED.title_hi, title_en = EXCLUDED.title_en,

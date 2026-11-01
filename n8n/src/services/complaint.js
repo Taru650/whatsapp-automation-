@@ -290,7 +290,7 @@ function complaintHandle(req, snap) {
   // Generic free text: a complaint id, "my complaints", or the open menu
   if (input.kind === 'text' && input.text) {
     const text = input.text.trim();
-    if (/^SCB-\d{4}-\d{6}$/i.test(text)) {
+    if (/^SCB-\d{4}-C\d{5}$/i.test(text)) {
       const found = s.my_complaints.find((c) => c.complaint_id.toLowerCase() === text.toLowerCase());
       return found ? singleComplaintScreen(r, found) :
         { messages: [{ type: 'text', body: cmpT(lang, "I couldn't find that complaint ID under your number.", 'आपके नंबर पर यह शिकायत ID नहीं मिली।') }],

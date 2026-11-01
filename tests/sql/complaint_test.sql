@@ -1,12 +1,12 @@
 -- svc_complaint schema SQL tests (rolled back). psql -v ON_ERROR_STOP=1 -f tests/sql/complaint_test.sql
 BEGIN;
 DO $$
-DECLARE id1 text; id2 text; r jsonb; s jsonb; mela_kw text[];
+DECLARE id1 text; id2 text; r jsonb; s jsonb; mela_kw text[]; cmp_kw text[];
 BEGIN
     -- next_complaint_id: stable format, monotonic within the year
     id1 := svc_complaint.next_complaint_id();
     id2 := svc_complaint.next_complaint_id();
-    ASSERT id1 ~ '^SCB-\d{4}-\d{6}$', 'id format: ' || id1;
+    ASSERT id1 ~ '^SCB-\d{4}-C\d{5}$', 'id format: ' || id1;
     ASSERT id2 > id1, 'ids increase monotonically: ' || id1 || ' / ' || id2;
 
     -- apply_effects: creates the complaint, its evidence and an 'open' history row
@@ -14,7 +14,7 @@ BEGIN
         {"type": "create_complaint", "category_key": "water_supply", "description": "no water since morning",
          "lang": "hi", "lat": 25.69, "lon": 85.17,
          "evidence": [{"path": "wa-abc/1.jpg", "mime": "image/jpeg", "kind": "photo", "sha256": "abc"}]}]}');
-    ASSERT r->>'complaint_id' ~ '^SCB-\d{4}-\d{6}$', 'apply_effects returns a real id: ' || r::text;
+    ASSERT r->>'complaint_id' ~ '^SCB-\d{4}-C\d{5}$', 'apply_effects returns a real id: ' || r::text;
     ASSERT (SELECT status FROM grievance.complaints WHERE complaint_id = r->>'complaint_id') = 'open', 'new complaint starts open';
     ASSERT (SELECT department_id FROM grievance.complaints WHERE complaint_id = r->>'complaint_id')
          = (SELECT department_id FROM grievance.complaint_categories WHERE category_key = 'water_supply'),
@@ -47,6 +47,9 @@ BEGIN
 
     -- registry row: disabled by default, like every new service (docs/adding-a-service.md)
     ASSERT (SELECT id_prefix FROM core.services WHERE service_key = 'complaint') = 'cmp', 'complaint service registered';
+    SELECT keywords INTO cmp_kw FROM core.services WHERE service_key = 'complaint';
+    ASSERT 'scb' = ANY (cmp_kw),
+        '"scb" must be a keyword, or typing a bare complaint id with no pending state goes to the LLM instead of this service';
     ASSERT NOT (SELECT enabled FROM core.services WHERE service_key = 'complaint'), 'disabled by default until M5 is staged';
     -- menu_order is higher than mela's on purpose (not lower): both services
     -- set accepts_location, and route.js falls back to the first enabled

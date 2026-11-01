@@ -797,7 +797,9 @@ def complaint_registration_happy_path():
 
     send(u, m_list(u, "cmp:cat:water_supply", "Water supply"))
     out = wait_out(u, 4)
-    assert "describe" in body_of(out[3]).lower(), summary(out[3])
+    # lang is still the 'hi' default here (no text message yet to guess 'en' from -
+    # see complaint_keyword_takes_over_from_mela_without_editing_mela for that switch)
+    assert scalar(f"select state from core.sessions where wa_hash = '{hash_of(u)}'") == "cmp.describe", summary(out[3])
 
     send(u, m_text(u, "No water since yesterday morning"))
     out = wait_out(u, 5)

@@ -122,21 +122,21 @@ test('complaint: edit returns to describe keeping the category, confirm with a s
 });
 
 test('complaint: status check by id, restricted to the citizen\'s own number', () => {
-  const snap = snapFixture({ my_complaints: [{ complaint_id: 'SCB-2026-000001', category_key: 'water_supply', status: 'in_progress', created_at: '2026-11-20 10:00', updated_at: '2026-11-21 09:00' }] });
-  let o = ok(complaintHandle(req({ kind: 'text', text: 'SCB-2026-000001' }), snap));
+  const snap = snapFixture({ my_complaints: [{ complaint_id: 'SCB-2026-C00001', category_key: 'water_supply', status: 'in_progress', created_at: '2026-11-20 10:00', updated_at: '2026-11-21 09:00' }] });
+  let o = ok(complaintHandle(req({ kind: 'text', text: 'SCB-2026-C00001' }), snap));
   assert.match(body(o), /In progress/);
-  o = ok(complaintHandle(req({ kind: 'text', text: 'scb-2026-000001' }), snap));
+  o = ok(complaintHandle(req({ kind: 'text', text: 'scb-2026-c00001' }), snap));
   assert.match(body(o), /In progress/, 'case-insensitive');
-  o = ok(complaintHandle(req({ kind: 'text', text: 'SCB-2026-999999' }), snap));
+  o = ok(complaintHandle(req({ kind: 'text', text: 'SCB-2026-C99999' }), snap));
   assert.match(body(o), /couldn't find/);
 });
 
 test('complaint: "my complaints" lists everything, or says there is nothing yet', () => {
   let o = ok(complaintHandle(req({ kind: 'text', text: 'मेरी शिकायत' }), snapFixture()));
   assert.match(body(o), /not filed any complaints/);
-  const snap = snapFixture({ my_complaints: [{ complaint_id: 'SCB-2026-000001', status: 'closed', updated_at: '2026-11-21 09:00' }] });
+  const snap = snapFixture({ my_complaints: [{ complaint_id: 'SCB-2026-C00001', status: 'closed', updated_at: '2026-11-21 09:00' }] });
   o = ok(complaintHandle(req({ id: 'cmp:mine' }), snap));
-  assert.match(body(o), /SCB-2026-000001/);
+  assert.match(body(o), /SCB-2026-C00001/);
 });
 
 test('complaint: stale/unknown ids and unrelated input fall back to the open menu', () => {
@@ -145,8 +145,8 @@ test('complaint: stale/unknown ids and unrelated input fall back to the open men
 });
 
 test('complaintReceiptMessage: real id vs a failed registration', () => {
-  const o1 = ok(complaintReceiptMessage(req({}), 'SCB-2026-000042'));
-  assert.match(body(o1), /SCB-2026-000042/);
+  const o1 = ok(complaintReceiptMessage(req({}), 'SCB-2026-C00042'));
+  assert.match(body(o1), /SCB-2026-C00042/);
   assert.equal(o1.log.subtype, 'registered');
   const o2 = ok(complaintReceiptMessage(req({}), null));
   assert.match(body(o2), /could not be registered/);
@@ -160,11 +160,11 @@ test('haversineM: zero at the same point, realistic over ~1 degree latitude', ()
 });
 
 test('buildStatusNotification: status label and an optional remark, both languages', () => {
-  const en = buildStatusNotification({ complaint_id: 'SCB-2026-000001', status: 'resolved', remark: 'Pipe fixed' }, 'en');
-  assert.match(en[0].body, /SCB-2026-000001/);
+  const en = buildStatusNotification({ complaint_id: 'SCB-2026-C00001', status: 'resolved', remark: 'Pipe fixed' }, 'en');
+  assert.match(en[0].body, /SCB-2026-C00001/);
   assert.match(en[0].body, /Resolved/);
   assert.match(en[0].body, /Pipe fixed/);
-  const hi = buildStatusNotification({ complaint_id: 'SCB-2026-000001', status: 'closed' }, 'hi');
+  const hi = buildStatusNotification({ complaint_id: 'SCB-2026-C00001', status: 'closed' }, 'hi');
   assert.match(hi[0].body, /बंद/);
   assert.doesNotMatch(hi[0].body, /Note:/);
 });
