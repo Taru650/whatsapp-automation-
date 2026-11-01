@@ -901,13 +901,15 @@ def complaint_status_check_is_restricted_to_the_citizens_own_number():
     h = hash_of(u)
     cid = scalar(f"select complaint_id from grievance.complaints where citizen_wa_hash = '{h}'")
 
+    # done=true here too, but feedback was already asked once this session
+    # (right after cmp:confirm) - finalizeTurn only ever asks once per session.
     send(u, m_text(u, cid))
-    out = wait_out(u, 12)
+    out = wait_out(u, 11)
     assert "Open" in body_of(out[10]), body_of(out[10])
 
     other = user()
     send(other, m_text(other, cid))
-    out = wait_out(other, 2)
+    out = wait_out(other, 3)  # welcome + miss message + first feedback ask of this (fresh) session
     assert "couldn't find" in body_of(out[1]), "a citizen must never look up another citizen's complaint by id"
 
 
