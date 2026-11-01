@@ -88,6 +88,17 @@ def m_audio(wa_id):
     return {"from": wa_id, "id": next_id(), "timestamp": "1", "type": "audio", "audio": {"id": "media1", "mime_type": "audio/ogg"}}
 
 
+def m_image(wa_id, media_id="MEDIA_IMAGE_1", mime="image/jpeg", caption=None):
+    img = {"id": media_id, "mime_type": mime}
+    if caption is not None:
+        img["caption"] = caption
+    return {"from": wa_id, "id": next_id(), "timestamp": "1", "type": "image", "image": img}
+
+
+def m_document(wa_id, media_id="MEDIA_PDF_1", mime="application/pdf"):
+    return {"from": wa_id, "id": next_id(), "timestamp": "1", "type": "document", "document": {"id": media_id, "mime_type": mime}}
+
+
 def post(payload, signature=None):
     raw = json.dumps(payload).encode()
     sig = signature or "sha256=" + hmac.new(APP_SECRET.encode(), raw, hashlib.sha256).hexdigest()
@@ -156,7 +167,9 @@ def hash_of(wa_id):
 
 def reset_state():
     sql("truncate core.message_log, core.feedback, core.unanswered, core.sessions, core.citizens, core.sync_runs")
-    sql("delete from core.services where service_key not in ('echo', 'mela')")
+    sql("delete from core.services where service_key not in ('echo', 'mela', 'complaint')")
+    sql("truncate grievance.notification_outbox, grievance.complaint_status_history, grievance.complaint_evidence, grievance.complaints")
+    sql("update grievance.settings set value = 'false' where key = 'geofence_enabled'")
     enable_only("echo")
     sql("update core.settings set value = 'true' where key = 'llm_enabled'")
     reset_mocks()
@@ -173,7 +186,7 @@ TESTS = []
 
 def enable_only(*keys):
     names = ",".join(f"'{k}'" for k in keys)
-    sql(f"update core.services set enabled = (service_key in ({names})) where service_key in ('echo', 'mela')")
+    sql(f"update core.services set enabled = (service_key in ({names})) where service_key in ('echo', 'mela', 'complaint')")
 
 
 def scenario(fn=None, services=("echo",)):
@@ -754,6 +767,160 @@ def nightly_purge_runs_and_reports():
     r = run_workflow("CorePurge0000001")
     assert r["ok"] and r["purged"]["retention_days"] == 180 and r["purged"]["message_log"] >= 1, r
     assert scalar("select count(*) from core.message_log where wa_msg_id = 'wamid.OLD1'") == "0"
+
+
+# ---------------------------------------------------------------- M4/M5: Complaints ---
+COMPLAINT_ONLY = ("complaint",)
+MELA_AND_COMPLAINT = ("mela", "complaint")
+
+
+def set_geofence(enabled, lat=None, lon=None, radius_m=None):
+    sql(f"update grievance.settings set value = '{'true' if enabled else 'false'}' where key = 'geofence_enabled'")
+    if lat is not None:
+        sql(f"update grievance.settings set value = '{lat}' where key = 'geofence_center_lat'")
+    if lon is not None:
+        sql(f"update grievance.settings set value = '{lon}' where key = 'geofence_center_lon'")
+    if radius_m is not None:
+        sql(f"update grievance.settings set value = '{radius_m}' where key = 'geofence_radius_m'")
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_registration_happy_path():
+    u = user()
+    send(u, m_button(u, "cmp:open"))
+    out = wait_out(u, 2)
+    assert ids_of(out[1]) == ["cmp:new", "cmp:mine", "core:menu"], summary(out[1])
+
+    send(u, m_button(u, "cmp:new", "New complaint"))
+    out = wait_out(u, 3)
+    assert out[2]["payload"]["interactive"]["type"] == "list", summary(out[2])
+
+    send(u, m_list(u, "cmp:cat:water_supply", "Water supply"))
+    out = wait_out(u, 4)
+    assert "describe" in body_of(out[3]).lower(), summary(out[3])
+
+    send(u, m_text(u, "No water since yesterday morning"))
+    out = wait_out(u, 5)
+    assert "photo" in body_of(out[4]).lower(), summary(out[4])
+
+    send(u, m_image(u))
+    out = wait_out(u, 6)
+    assert ids_of(out[5]) == ["cmp:evidence:done"], summary(out[5])
+
+    send(u, m_button(u, "cmp:evidence:done", "Done"))
+    out = wait_out(u, 7)
+    assert out[6]["payload"]["interactive"]["type"] == "location_request_message", summary(out[6])
+
+    send(u, m_location(u, 25.6912, 85.1720))
+    out = wait_out(u, 8)
+    assert "Submit" in str(out[7]["payload"]), summary(out[7])
+    assert "No water" in body_of(out[7]), body_of(out[7])
+
+    send(u, m_button(u, "cmp:confirm", "Submit"))
+    out = wait_out(u, 10)  # the registered-receipt message + the feedback prompt (done=true)
+    receipt = body_of(out[8])
+    assert "SCB-" in receipt, receipt
+
+    h = hash_of(u)
+    row = sql(f"select category_key, department_id, status, lat, lon from grievance.complaints where citizen_wa_hash = '{h}'")
+    assert len(row) == 1, row
+    assert row[0][0] == "water_supply" and row[0][2] == "open" and row[0][3] == "25.6912" and row[0][4] == "85.172", row
+    assert int(scalar(f"select count(*) from grievance.complaint_evidence where complaint_id = "
+                       f"(select complaint_id from grievance.complaints where citizen_wa_hash = '{h}')")) == 1
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_requires_at_least_one_photo_before_location():
+    u = user()
+    send(u, m_button(u, "cmp:open"))
+    wait_out(u, 2)
+    send(u, m_button(u, "cmp:new"))
+    wait_out(u, 3)
+    send(u, m_list(u, "cmp:cat:electricity", "Electricity"))
+    wait_out(u, 4)
+    send(u, m_text(u, "No power in the whole block"))
+    wait_out(u, 5)
+    send(u, m_text(u, "done"))  # no photo added yet
+    out = wait_out(u, 6)
+    assert "at least one photo" in body_of(out[5]), body_of(out[5])
+    h = hash_of(u)
+    assert scalar(f"select state from core.sessions where wa_hash = '{h}'") == "cmp.evidence", "still waiting for a photo"
+    assert scalar(f"select count(*) from grievance.complaints where citizen_wa_hash = '{h}'") == "0"
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_geofence_rejects_outside_then_accepts_inside():
+    set_geofence(True, lat=25.6920, lon=85.1750, radius_m=200)
+    u = user()
+    send(u, m_button(u, "cmp:open"))
+    wait_out(u, 2)
+    send(u, m_button(u, "cmp:new"))
+    wait_out(u, 3)
+    send(u, m_list(u, "cmp:cat:other", "Other"))
+    wait_out(u, 4)
+    send(u, m_text(u, "General issue near the gate"))
+    wait_out(u, 5)
+    send(u, m_image(u))
+    wait_out(u, 6)
+    send(u, m_button(u, "cmp:evidence:done"))
+    wait_out(u, 7)
+
+    send(u, m_location(u, 26.0, 86.0))  # far outside the 200m radius
+    out = wait_out(u, 8)
+    assert "inside the Mela ground" in body_of(out[7]), body_of(out[7])
+    h = hash_of(u)
+    assert scalar(f"select state from core.sessions where wa_hash = '{h}'") == "cmp.location"
+
+    send(u, m_location(u, 25.6921, 85.1751))  # a few metres away: inside
+    out = wait_out(u, 9)
+    assert "Submit" in str(out[8]["payload"]), summary(out[8])
+    set_geofence(False)
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_status_check_is_restricted_to_the_citizens_own_number():
+    u = user()
+    send(u, m_button(u, "cmp:open"))
+    wait_out(u, 2)
+    send(u, m_button(u, "cmp:new"))
+    wait_out(u, 3)
+    send(u, m_list(u, "cmp:cat:sanitation", "Sanitation"))
+    wait_out(u, 4)
+    send(u, m_text(u, "Garbage not collected"))
+    wait_out(u, 5)
+    send(u, m_image(u))
+    wait_out(u, 6)
+    send(u, m_button(u, "cmp:evidence:done"))
+    wait_out(u, 7)
+    send(u, m_location(u, 25.6912, 85.1720))
+    wait_out(u, 8)
+    send(u, m_button(u, "cmp:confirm"))
+    wait_out(u, 10)
+    h = hash_of(u)
+    cid = scalar(f"select complaint_id from grievance.complaints where citizen_wa_hash = '{h}'")
+
+    send(u, m_text(u, cid))
+    out = wait_out(u, 12)
+    assert "Open" in body_of(out[10]), body_of(out[10])
+
+    other = user()
+    send(other, m_text(other, cid))
+    out = wait_out(other, 2)
+    assert "couldn't find" in body_of(out[1]), "a citizen must never look up another citizen's complaint by id"
+
+
+@scenario(services=MELA_AND_COMPLAINT)
+def complaint_keyword_takes_over_from_mela_without_editing_mela():
+    u = user()
+    send(u, m_text(u, "shikayat"))
+    out = wait_out(u, 2)
+    assert ids_of(out[1]) == ["cmp:new", "cmp:mine", "core:menu"], \
+        "the keyword correction in sql/31_svc_complaint.sql must route this to svc_complaint, not mela's control room"
+    # mela keeps its own control-room keywords (helpline/emergency), untouched
+    v = user()
+    send(v, m_text(v, "helpline"))
+    out = wait_out(v, 2)
+    assert "control" in body_of(out[1]).lower() or "कंट्रोल" in body_of(out[1]), summary(out[1])
 
 
 # ---------------------------------------------------------------- runner ---

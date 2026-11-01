@@ -31,10 +31,21 @@ for db in ${BACKUP_DBS:-citizen_bot n8n}; do
   dec "$file" > "$WORK/$db.dump" 2>/dev/null || { echo "cannot decrypt $file (wrong BACKUP_PASSPHRASE?) - nothing was changed" >&2; exit 1; }
   $PG_RESTORE -l < "$WORK/$db.dump" > /dev/null 2>&1 || { echo "$file is not a valid dump - nothing was changed" >&2; exit 1; }
 done
+# Complaint evidence volume: optional (older backups predate it), but if a tar
+# is present for this stamp it must decrypt cleanly before anything is touched.
+media_file="$DIR/complaint-media-$STAMP.tar.enc"
+if [[ -f "$media_file" ]]; then
+  dec "$media_file" > "$WORK/complaint-media.tar" 2>/dev/null || { echo "cannot decrypt $media_file (wrong BACKUP_PASSPHRASE?) - nothing was changed" >&2; exit 1; }
+fi
 for db in ${BACKUP_DBS:-citizen_bot n8n}; do
   target="$db$SUFFIX"
   $PSQL -d postgres -v ON_ERROR_STOP=1 -q -c "drop database if exists \"$target\" with (force)" -c "create database \"$target\""
   $PG_RESTORE -d "$target" --no-owner --exit-on-error < "$WORK/$db.dump"
   echo "restored $DIR/$db-$STAMP.dump.enc -> $target"
 done
+if [[ -f "$WORK/complaint-media.tar" && -z "$SUFFIX" ]]; then
+  docker compose exec -T n8n sh -c 'rm -rf /data/complaint-media/* /data/complaint-media/.[!.]* 2>/dev/null; mkdir -p /data/complaint-media'
+  docker compose exec -T n8n tar -C /data/complaint-media -xf - < "$WORK/complaint-media.tar"
+  echo "restored $media_file -> complaint_media volume"
+fi
 echo "Done. For a real restore: docker compose run --rm import && docker compose up -d"

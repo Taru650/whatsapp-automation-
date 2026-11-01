@@ -26,6 +26,7 @@ const targets = {
   'services/svc-template.json': services.template,
   'services/svc-mela.json': services.mela,
   'services/sync-mela.json': services.syncMela,
+  'services/svc-complaint.json': services.complaint,
 };
 
 // Compile every Code node the way n8n runs it (the body of an async function).

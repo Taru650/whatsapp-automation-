@@ -4,6 +4,9 @@
 * POST /<version>/<phone_number_id>/messages  -> validates the payload against
   Meta's field limits (HTTP 400 on violation, like the real API), records it,
   returns {"messages": [{"id": "wamid.mock.N"}]}
+* GET  /<version>/<media-id>  -> media metadata {"url", "mime_type", "file_size"}
+  for the fixed set of test media ids below (svc-complaint's evidence download)
+* GET  /__media/<media-id>    -> the (fake) bytes for that media id
 * GET  /__captured   -> JSON list of every accepted/rejected request
 * POST /__reset      -> clear captures
 
@@ -18,6 +21,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 LOCK = threading.Lock()
 CAPTURED = []
 COUNTER = [0]
+
+# Fixed test media ids for svc-complaint's evidence download (n8n/src/core/media.js).
+MEDIA_FIXTURES = {
+    "MEDIA_IMAGE_1": {"mime_type": "image/jpeg", "file_size": 2048, "bytes": b"\xff\xd8\xff" + b"fake-jpeg-bytes"},
+    "MEDIA_IMAGE_2": {"mime_type": "image/jpeg", "file_size": 2048, "bytes": b"\xff\xd8\xff" + b"fake-jpeg-bytes-2"},
+    "MEDIA_PDF_1": {"mime_type": "application/pdf", "file_size": 2048, "bytes": b"%PDF-1.4 fake-pdf-bytes"},
+    "MEDIA_TOOBIG_1": {"mime_type": "image/jpeg", "file_size": 11 * 1024 * 1024, "bytes": b""},
+    "MEDIA_BADTYPE_1": {"mime_type": "video/mp4", "file_size": 1024, "bytes": b"fake-video-bytes"},
+}
 
 
 def length(s):
@@ -97,6 +109,25 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/__captured":
             with LOCK:
                 return self._send(200, CAPTURED)
+        if self.path.startswith("/__media/"):
+            meta = MEDIA_FIXTURES.get(self.path[len("/__media/"):])
+            if not meta:
+                return self._send(404, {"error": "not found"})
+            body = meta["bytes"]
+            self.send_response(200)
+            self.send_header("Content-Type", meta["mime_type"])
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
+        # GET /<version>/<media-id>: Graph's media metadata lookup (one path segment, not .../messages)
+        parts = self.path.strip("/").split("/")
+        if len(parts) == 2 and parts[0].startswith("v"):
+            meta = MEDIA_FIXTURES.get(parts[1])
+            if not meta:
+                return self._send(404, {"error": {"message": "media not found", "type": "GraphMethodException", "code": 100}})
+            port = self.server.server_address[1]
+            return self._send(200, {"url": f"http://127.0.0.1:{port}/__media/{parts[1]}",
+                                     "mime_type": meta["mime_type"], "file_size": meta["file_size"], "id": parts[1]})
         self._send(404, {"error": "not found"})
 
     def do_POST(self):

@@ -62,6 +62,68 @@ return { json: out };
 }
 
 // ---------------------------------------------------------------------------
+// svc-complaint: load the citizen's snapshot -> download any photo/PDF evidence
+// -> handle -> apply effects (creates the complaint + its id) -> real receipt
+// Linear on purpose, same reason as svc-mela: a sub-workflow returns its last
+// node's output, so every item must end in the same node.
+// ---------------------------------------------------------------------------
+export function complaint() {
+  const w = new Workflow(IDS.complaint, 'svc-complaint');
+  const trig = w.trigger();
+  const load = w.pg('Load Complaint Data', 'select svc_complaint.snapshot($1) as snap', '={{ [ $json.wa_hash ] }}');
+  // Not wired into core-00-router: only this workflow ever downloads media, so
+  // the shared router pipeline (and every other service) is untouched.
+  const media = w.code('Download Media', { modules: ['core/media.js'], main: `
+const req = $('When Called').item.json;
+let input = { ...req.input };
+if (input.kind === 'image' || input.kind === 'document') {
+  const crypto = require('crypto');
+  const fs = require('fs');
+  const path = require('path');
+  const cfg = { base: $env.WA_API_BASE, version: $env.GRAPH_API_VERSION, token: $env.WHATSAPP_ACCESS_TOKEN };
+  try {
+    const dl = await downloadMedia(input.media_id, input.mime, cfg, this.helpers.httpRequest.bind(this.helpers));
+    if (dl.error) {
+      input = { ...input, media_error: dl.error };
+    } else {
+      const sha256 = crypto.createHash('sha256').update(dl.buffer).digest('hex');
+      const ext = dl.kind === 'pdf' ? 'pdf' : (dl.mime === 'image/png' ? 'png' : 'jpg');
+      const rel = req.wa_hash + '/' + sha256 + '.' + ext;
+      const full = path.join($env.COMPLAINT_MEDIA_PATH || '/data/complaint-media', rel);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, dl.buffer);
+      input = { ...input, media_path: rel, media_mime: dl.mime, media_kind: dl.kind, media_sha256: sha256 };
+    }
+  } catch (e) {
+    input = { ...input, media_error: 'download_failed' };
+  }
+}
+return { json: { ...req, input } };
+` });
+  const handle = w.code('Handle', { modules: ['services/complaint.js'], main: `
+const { _router, route, ...req } = $json;
+const snap = $('Load Complaint Data').item.json.snap || {};
+return { json: { out: complaintHandle(req, snap), wa_hash: req.wa_hash, lang: req.lang } };
+` });
+  const effects = w.pg('Apply Effects', 'select svc_complaint.apply_effects($1::jsonb) as r',
+    '={{ [ JSON.stringify({ wa_hash: $json.wa_hash, effects: $json.out.effects || [] }) ] }}');
+  const finish = w.code('Finish', { modules: ['services/complaint.js'], main: `
+const h = $('Handle').item.json;
+let out = h.out;
+if ((out.effects || []).some((e) => e.type === 'create_complaint')) {
+  out = complaintReceiptMessage({ lang: h.lang }, ($json.r && $json.r.complaint_id) || null);
+}
+return { json: out };
+` });
+  const ret = w.code('Return', { main: `
+const { effects, ...out } = $json;
+return { json: out };
+` });
+  w.chain(trig, load, media, handle, effects, finish, ret);
+  return w;
+}
+
+// ---------------------------------------------------------------------------
 // sync-mela: Google Sheet -> validate -> atomic replace (or keep old data + alert)
 // Runs every 10 minutes; can also be called (tests, "sync now" from the runbook).
 // ---------------------------------------------------------------------------

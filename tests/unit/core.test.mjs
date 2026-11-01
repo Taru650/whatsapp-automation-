@@ -77,6 +77,22 @@ test('normalize: all message kinds', () => {
   assert.equal(guessLang('123'), null);
 });
 
+// --- normalize: media (complaint evidence) ---------------------------------
+test('normalize: image/document carry media_id and mime, never input.id', () => {
+  const img = normalizeMessage({ type: 'image', image: { id: 'MID1', mime_type: 'image/jpeg', caption: 'leak' } });
+  assert.deepEqual({ kind: img.kind, id: img.id, media_id: img.media_id, mime: img.mime, text: img.text },
+    { kind: 'image', id: null, media_id: 'MID1', mime: 'image/jpeg', text: 'leak' });
+  const doc = normalizeMessage({ type: 'document', document: { id: 'MID2', mime_type: 'application/pdf' } });
+  assert.deepEqual({ kind: doc.kind, id: doc.id, media_id: doc.media_id, mime: doc.mime },
+    { kind: 'document', id: null, media_id: 'MID2', mime: 'application/pdf' });
+  // route.js's id-prefix branch (`if (input.id) ...`) must never see a raw media id as input.id,
+  // or a photo mid-flow would be misrouted to "stale id -> menu" instead of reaching the service.
+  assert.equal(img.id, null);
+  assert.equal(doc.id, null);
+  // everything still unhandled (voice, stickers, contacts, reactions, video) stays unsupported
+  assert.equal(normalizeMessage({ type: 'video', video: { id: 'MID3' } }).kind, 'unsupported');
+});
+
 // --- route -----------------------------------------------------------------
 const services = [svc('mela', 1, { accepts_location: true }), svc('dir', 2)];
 const route = (input, extra = {}) => decideRoute({ input, state: null, services, isAdmin: false, llmEnabled: true, ...extra });
@@ -94,6 +110,10 @@ test('route: precedence', () => {
   assert.equal(route({ kind: 'button', id: 'mela:adm:pin' }, { isAdmin: true }).action, 'service');
   // session state owner receives free text
   assert.equal(route({ kind: 'text', text: 'Kali Ghat' }, { state: 'dir.search' }).service.service_key, 'dir');
+  // ...and an evidence photo/PDF the same way (normalize.js never puts a media
+  // id into input.id, so this never hits the id-prefix "stale_id" branch instead)
+  assert.equal(route({ kind: 'image', media_id: 'MID1' }, { state: 'dir.search' }).service.service_key, 'dir');
+  assert.equal(route({ kind: 'image', media_id: 'MID1' }).action, 'menu', 'an unsolicited photo with no pending state just gets the menu');
   // location: state owner only if it accepts location, else the location handler
   assert.equal(route({ kind: 'location', lat: 1, lon: 2 }, { state: 'dir.search' }).service.service_key, 'mela');
   // free text: a registry keyword routes without the LLM

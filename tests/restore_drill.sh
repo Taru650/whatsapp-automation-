@@ -16,7 +16,7 @@ fingerprint() {  # "schema.table rows md5" for every table in our schemas
   psql -d "$1" -XAt -c "
     select string_agg(t, E'\n' order by t) from (
       select format('%s.%s', table_schema, table_name) as t from information_schema.tables
-      where table_schema in ('core', 'svc_mela', 'analytics') and table_type = 'BASE TABLE') x" |
+      where table_schema in ('core', 'svc_mela', 'analytics', 'grievance', 'svc_complaint') and table_type = 'BASE TABLE') x" |
   while read -r t; do
     echo "$t $(psql -d "$1" -XAt -c "select count(*) || ' ' || md5(coalesce(string_agg(x::text, '|' order by x::text), '')) from $t x")"
   done
