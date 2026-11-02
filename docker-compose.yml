@@ -170,9 +170,10 @@ services:
     ports:
       - "127.0.0.1:${METABASE_HOST_PORT:-3000}:3000"
 
-  # Complaint portal for staff (portal/). Bound to 127.0.0.1 like n8n and Metabase:
-  # reach it over Tailscale / an SSH tunnel until M9 adds the public /portal path to
-  # Caddy. Own profile, so stacks that don't run it yet need none of its settings.
+  # Complaint portal for staff (portal/). Public at https://PUBLIC_HOST/portal/ through
+  # Caddy (deploy/Caddyfile); the port itself is bound to 127.0.0.1 like n8n and
+  # Metabase. Own profile, so stacks that don't run it need none of its settings
+  # (Caddy then answers 502 on /portal and everything else is unaffected).
   #   docker compose --profile portal up -d portal
   #   docker compose run --rm portal node scripts/create_user.mjs --role district_admin --username <u> --name "<name>"
   portal:

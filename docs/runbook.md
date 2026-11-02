@@ -24,18 +24,30 @@ change the compose port bindings to 0.0.0.0: Docker bypasses ufw.
    `PGCRYPTO_KEY` and `PHONE_HASH_SECRET` in the office password safe. Losing
    them makes stored credentials and numbers unreadable.
 2. `dc up -d postgres && dc run --rm migrate && dc run --rm import`
-3. Office machine: `dc --profile tunnel up -d`. VPS: `dc --profile vps up -d`
-   (DNS for `PUBLIC_HOST` must point at the VPS).
+3. Office machine: `dc --profile tunnel --profile portal up -d`. VPS:
+   `dc --profile vps --profile portal up -d` (DNS for `PUBLIC_HOST` must point
+   at the VPS). Without `--profile portal` the bot runs exactly as before and
+   `/portal` answers 502.
 4. Cloudflare (office machine): Zero Trust → Tunnels → create a tunnel and
    copy its token into `CLOUDFLARE_TUNNEL_TOKEN`. Public hostname
-   `PUBLIC_HOST` → service `http://caddy:80`. Caddy forwards only `/webhook/wa*`
-   and `/healthz`.
+   `PUBLIC_HOST` → service `http://caddy:80`. Caddy forwards only
+   `/webhook/wa`, `/webhook/health`, `/healthz` and the staff portal under
+   `/portal/`; everything else is 404 (`tests/caddy_probe.sh` proves it).
+   In the Cloudflare dashboard turn on **SSL/TLS → Edge Certificates → Always
+   Use HTTPS**: the portal's session cookie is only marked Secure on https.
 5. Meta → WhatsApp → Configuration:
    - callback URL `https://PUBLIC_HOST/webhook/wa`
    - verify token = `WHATSAPP_VERIFY_TOKEN`
    - subscribe to `messages`
 6. UptimeRobot: monitor `https://PUBLIC_HOST/healthz` every 5 minutes, with
    SMS alerts to the technical owner.
+7. Staff portal (see *Complaint portal* below): set `PORTAL_DB_PASSWORD` and
+   `PORTAL_SESSION_SECRET` **before** step 2, create the first district admin,
+   and add a second UptimeRobot monitor on `https://PUBLIC_HOST/portal/healthz`.
+   Staff sign in at `https://PUBLIC_HOST/portal/`.
+8. **Go-live gate for complaints:** Meta has approved the `complaint_update`
+   template in English and Hindi (see *Status updates to citizens*). Until
+   then, enable the complaint service only on staging.
 
 ## Real-phone check on the Meta test number (15 minutes; M1 gate item)
 Prerequisite: the `mela` service must be enabled and have synced at least
@@ -97,10 +109,22 @@ With no data, screens still work but say "no places/events found".
 
 ## Complaint portal (staff)
 
-Staff manage WhatsApp complaints at `/portal` (code in `portal/`). Until the
-public go-live step it listens on `127.0.0.1:3001` only — reach it the same way
-as Metabase: `ssh -N -L 3001:127.0.0.1:3001 <user>@<tailscale-name>`, then open
+Staff manage WhatsApp complaints at `https://PUBLIC_HOST/portal/` (code in
+`portal/`), through Cloudflare and Caddy. The container itself still listens
+on `127.0.0.1:3001` only; the technical owner can also reach it over SSH:
+`ssh -N -L 3001:127.0.0.1:3001 <user>@<tailscale-name>`, then
 `http://localhost:3001/portal/`.
+
+What protects it on the internet: its own sign-in (bcrypt, 10+ character
+passwords, 5 wrong tries per person per client → 15-minute lockout), sessions
+that end the moment an account is disabled, CSRF tokens on every form, a strict
+content-security policy, HSTS, and a database login that cannot read citizens'
+phone numbers. Caddy passes on the real client IP (Cloudflare's
+`CF-Connecting-IP`, believed only from the tunnel) and caps uploads at 55 MB.
+Recommended extra layer, no code needed: **Cloudflare Zero Trust → Access**,
+an application for `PUBLIC_HOST/portal*` with a one-time e-mail code for your
+staff's addresses, so strangers never even see the sign-in page. Leave
+`/portal/healthz` outside it (a bypass policy) for UptimeRobot.
 
 **First start**
 1. In `.env`: `PORTAL_DB_PASSWORD` and `PORTAL_SESSION_SECRET` (both `openssl rand -hex 32`).
@@ -118,7 +142,8 @@ as Metabase: `ssh -N -L 3001:127.0.0.1:3001 <user>@<tailscale-name>`, then open
 | Someone leaves | **Staff** → *Disable* — they are signed out on their next click |
 | Who did what | `... -c "select ts, user_id, action, target, detail from grievance.portal_audit order by id desc limit 50"` |
 | Portal logs | `dc logs --tail 200 portal` |
-| Health | `curl -s localhost:3001/portal/healthz` → `{"ok":true}` |
+| Health | `curl -s https://PUBLIC_HOST/portal/healthz` → `{"ok":true,"notify_backlog":0}`; **503** means the DB is down or a citizen update has waited 10+ minutes without n8n even trying (`core-11-notify-poll` not running: check `dc logs n8n`) |
+| Locked out after wrong passwords | wait 15 minutes (the limit is per person *and* client, so others are unaffected) |
 
 ### Status updates to citizens on WhatsApp
 
@@ -172,6 +197,8 @@ by "The issue has been resolved." so an unverified number never reaches a citize
 - **UptimeRobot, keyword monitor:** the same URL, alerting when `"status":"ok"`
   is missing. This means the Mela sheet hasn't synced for over an hour, so the
   bot is answering from stale data.
+- **UptimeRobot, HTTP monitor:** `https://PUBLIC_HOST/portal/healthz` every 5 min.
+  Down means staff can't work complaints, or citizens' status updates are stuck.
 - **Direct check:** `curl -s https://PUBLIC_HOST/webhook/health` shows the
   status, issues, enabled services, the last inbound message and errors in
   the last 15 minutes.

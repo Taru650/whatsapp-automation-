@@ -3,6 +3,7 @@
 // was delivered. (Sending itself is n8n's core-11-notify-poll: flow tests.)
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import request from 'supertest';
 import { setup, login, post, tokenOf } from './helpers.mjs';
 
 const t = setup();
@@ -110,4 +111,20 @@ test('the complaint page shows whether each update reached the citizen', async (
   assert.match(page, />Failed</);
   assert.match(page, /Not delivered after 5 attempts: HTTP 400: undeliverable/);
   assert.doesNotMatch(page, /91\d{10}/, 'no phone number anywhere on the page');
+});
+
+test('healthz turns 503 when a queued update was never attempted for 10 minutes (n8n poll dead)', async () => {
+  const id = await t.complaint('N5', 'water_supply', 'phed');
+  const before = (await request(t.app).get('/portal/healthz')).body.notify_backlog;
+  await t.pool.query(`insert into grievance.notification_outbox (complaint_id, wa_hash, template_key, payload, created_at)
+                      values ($1, 'h', 'status_assigned', '{}', now() - interval '11 minutes')`, [id]);
+  let r = await request(t.app).get('/portal/healthz');
+  assert.equal(r.status, 503);
+  assert.equal(r.body.ok, false);
+  assert.equal(r.body.notify_backlog, before + 1);
+
+  // tried and failing is a different problem (retries + admin alert), not a dead poll
+  await t.pool.query(`update grievance.notification_outbox set attempts = 1 where complaint_id = $1`, [id]);
+  r = await request(t.app).get('/portal/healthz');
+  assert.equal(r.body.notify_backlog, before);
 });

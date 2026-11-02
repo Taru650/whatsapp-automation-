@@ -43,9 +43,15 @@ export function createApp({ pool, config }) {
   r.use('/static/bootstrap', express.static(path.join(MODULES, 'bootstrap', 'dist'), { maxAge: '7d' }));
   r.use('/static/chart', express.static(path.join(MODULES, 'chart.js', 'dist'), { maxAge: '7d' }));
   r.use('/static', express.static(path.join(HERE, 'public'), { maxAge: '1h' }));
+  // UptimeRobot watches this. Besides the DB it covers n8n's core-11-notify-poll:
+  // a citizen update queued > 10 minutes ago that was never even attempted means
+  // the poll is not running (failed sends are retried and alerted separately).
   r.get('/healthz', async (req, res) => {
-    await pool.query('select 1');
-    res.json({ ok: true });
+    const { rows } = await pool.query(
+      `select count(*)::int as stuck from grievance.notification_outbox
+       where status = 'pending' and attempts = 0 and created_at < now() - interval '10 minutes'`);
+    const stuck = rows[0].stuck;
+    res.status(stuck ? 503 : 200).json({ ok: !stuck, notify_backlog: stuck });
   });
 
   const PgStore = connectPgSimple(session);
