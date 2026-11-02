@@ -162,7 +162,20 @@ WhatsApp's 24-hour window, so they are always sent as a template. Without an
 approved template every update fails (the page shows *Failed*, admins get one
 alert per batch). In WhatsApp Manager → Message templates → Create:
 
-- Category **Utility**, name `complaint_update` (or set `COMPLAINT_UPDATE_TEMPLATE`), languages **English (en)** and **Hindi (hi)**, same name for both.
+- Category **Utility**, name `complaint_update` (or set `COMPLAINT_UPDATE_TEMPLATE`), languages **English (en)** and **Hindi (hi)**, same name for both. No header, footer or buttons.
+- ⚠️ **Language: plain "English" (code `en`), not "English (US)" / "English (UK)".**
+  The bot sends `en`; Meta treats `en_US` as a different translation. Such a
+  template is approved normally, and then every English update fails with error
+  132001 (template does not exist in the translation). Hindi is `hi`. The same
+  applies to the `admin_alert` template, which is also sent as `en`.
+- ⚠️ **Variable type: Number (`{{1}}`), not Name (`{{complaint_id}}`).** The
+  bot sends the three values by position. A template with named variables is
+  approved normally, and then every send fails with a parameter mismatch
+  (error 132000). Don't reorder or remove variables either: the bot always
+  sends complaint number, status, note.
+- Add Hindi to the same template (open it → *Add language*), with the same
+  variable type. Each language is approved on its own: go live only when
+  **both** show *Active*.
 - Body, English:
   ```
   Update on your complaint {{1}}.
@@ -186,7 +199,8 @@ by "The issue has been resolved." so an unverified number never reaches a citize
 
 | Task | How |
 |---|---|
-| Updates not going out | complaint page shows *Failed* with the error; most likely the template isn't approved (Meta error 132001) or was renamed |
+| Updates not going out | complaint page shows *Failed* with the error. 132001: template not approved yet, renamed, or created as "English (US)" instead of "English"; 132000 / 132012: created with Name variables, or the variables changed |
+| Check after approval | file a complaint from a real phone on staging, then assign, start and close it in the portal: the phone gets 3 updates within a minute each and the page shows *Sent* ×3. Repeat once typing in Hindi to test the `hi` version |
 | Undelivered updates | `... -c "select complaint_id, template_key, attempts, last_error from grievance.notification_outbox where status = 'failed' order by id desc limit 50"` |
 | Send failed ones again (after fixing the cause) | `... -c "update grievance.notification_outbox set status = 'pending', attempts = 0, next_attempt_at = now() where status = 'failed'"` |
 | Retry policy | 5 attempts (after 2, 4, 8, 16 minutes), then *Failed* and one admin alert; a citizen with no number on record (purged after 180 days of silence) fails at once |
