@@ -17,7 +17,12 @@ function fakeHttp(meta, bodyBytes, { metaError, downloadError } = {}) {
       return meta;
     }
     if (downloadError) throw new Error('boom');
-    return { body: bodyBytes };
+    // like n8n's httpRequest: bytes only for encoding 'arraybuffer', otherwise the
+    // body comes back decoded as UTF-8 text (which mangles every byte >= 0x80)
+    if (req.encoding === 'arraybuffer') {
+      return { body: bodyBytes.buffer.slice(bodyBytes.byteOffset, bodyBytes.byteOffset + bodyBytes.length) };
+    }
+    return { body: bodyBytes.toString('utf8') };
   };
 }
 
@@ -29,8 +34,8 @@ test('media: mimeKind maps allowed types, rejects everything else', () => {
   assert.equal(mimeKind(undefined), null);
 });
 
-test('media: happy path downloads and tags the buffer', async () => {
-  const bytes = Buffer.from('fake-jpeg-bytes');
+test('media: happy path downloads the exact bytes (a real JPEG starts FF D8 FF)', async () => {
+  const bytes = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]), Buffer.from('body'), Buffer.from([0xff, 0xd9])]);
   const http = fakeHttp({ url: 'http://mock/cdn/x', mime_type: 'image/jpeg', file_size: bytes.length }, bytes);
   const r = await downloadMedia('MID1', 'image/jpeg', cfg, http);
   assert.deepEqual(r.buffer, bytes);

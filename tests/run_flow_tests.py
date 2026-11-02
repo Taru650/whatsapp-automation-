@@ -829,6 +829,17 @@ def complaint_registration_happy_path():
     assert row[0][0] == "water_supply" and row[0][2] == "open" and row[0][3] == "25.6912" and row[0][4] == "85.172", row
     assert int(scalar(f"select count(*) from grievance.complaint_evidence where complaint_id = "
                        f"(select complaint_id from grievance.complaints where citizen_wa_hash = '{h}')")) == 1
+    # byte-exact: the photo on disk is exactly what WhatsApp served (a text-decoded
+    # download once turned every byte >= 0x80 into U+FFFD and silently corrupted it)
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "mocks"))
+    from graph_api import MEDIA_FIXTURES  # noqa: E402
+    served = MEDIA_FIXTURES["MEDIA_IMAGE_1"]["bytes"]
+    sha, rel = sql(f"select sha256, file_path from grievance.complaint_evidence where complaint_id = "
+                   f"(select complaint_id from grievance.complaints where citizen_wa_hash = '{h}')")[0]
+    assert sha == hashlib.sha256(served).hexdigest(), "stored photo differs from the bytes WhatsApp served"
+    media_root = os.environ.get("COMPLAINT_MEDIA_PATH", os.path.join(os.getcwd(), ".dev", "complaint-media"))
+    with open(os.path.join(media_root, rel), "rb") as f:
+        assert f.read() == served, "file on disk differs from the bytes WhatsApp served"
 
 
 @scenario(services=COMPLAINT_ONLY)

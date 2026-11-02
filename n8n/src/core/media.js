@@ -38,12 +38,18 @@ async function downloadMedia(mediaId, declaredMime, cfg, http) {
   if (meta.file_size && Number(meta.file_size) > MAX_BYTES) return { error: 'too_large' };
   let res;
   try {
-    res = await http({ method: 'GET', url: meta.url, timeout: 20000, encoding: null,
+    // 'arraybuffer' is n8n's binary option (IHttpRequestOptions.encoding); the old
+    // request-library `encoding: null` makes n8n decode the photo as UTF-8 text,
+    // turning every non-ASCII byte into U+FFFD - a corrupted image.
+    res = await http({ method: 'GET', url: meta.url, timeout: 20000, encoding: 'arraybuffer',
       returnFullResponse: true, headers: { Authorization: `Bearer ${cfg.token}` } });
   } catch (e) {
     return { error: 'download_failed' };
   }
-  const buffer = Buffer.isBuffer(res.body) ? res.body : Buffer.from(res.body || '');
+  const body = res && res.body;
+  // a text body means the bytes were already decoded (and damaged): refuse rather than store it
+  if (!body || typeof body === 'string') return { error: 'download_failed' };
+  const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body);
   if (buffer.length === 0) return { error: 'download_failed' };
   if (buffer.length > MAX_BYTES) return { error: 'too_large' };
   return { buffer, mime: meta.mime_type || declaredMime, kind };

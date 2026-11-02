@@ -24,7 +24,11 @@ export function mediaRoutes({ pool, config }) {
     res.set('Cache-Control', 'private, max-age=3600');
     res.set('Content-Disposition', 'inline');
     res.type(e.mime_type);
-    return res.sendFile(full);
+    // dotfiles 'allow': the path is already confined to the media folder above, and
+    // send's default would refuse any mount point under a dot-directory (e.g. .dev/)
+    return res.sendFile(full, { dotfiles: 'allow' }, (err) => {
+      if (err && !res.headersSent) missing();
+    });
   });
 
   return r;

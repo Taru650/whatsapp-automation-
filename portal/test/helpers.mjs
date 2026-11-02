@@ -17,7 +17,9 @@ import { createPool } from '../src/db.js';
 export const PASSWORD = 'correct-horse-battery';
 
 export function setup(extraEnv = {}) {
-  const mediaPath = fs.mkdtempSync(path.join(os.tmpdir(), 'portal-media-'));
+  // under a dot-directory on purpose: the local dev stack keeps media in .dev/, and
+  // a naive res.sendFile refuses any path with a dot segment
+  const mediaPath = fs.mkdtempSync(path.join(fs.mkdtempSync(path.join(os.tmpdir(), '.portal-')), 'media-'));
   const config = loadConfig({
     ENV: 'test',
     PORTAL_DB_HOST: process.env.PORTAL_DB_HOST || '127.0.0.1',
