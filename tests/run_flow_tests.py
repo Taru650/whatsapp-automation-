@@ -938,6 +938,141 @@ def complaint_keyword_takes_over_from_mela_without_editing_mela():
     assert "control" in body_of(out[1]).lower() or "कंट्रोल" in body_of(out[1]), summary(out[1])
 
 
+# ---------------------------------------------------------------- M8: status notifications ---
+NOTIFY_WF = "CoreNotify000001"
+
+
+def register_complaint(u, category="cmp:cat:water_supply", text="Handpump broken near gate 3"):
+    """File one complaint over WhatsApp; returns its id (citizen lang becomes 'en' from the typed text)."""
+    for msg, n in ((m_button(u, "cmp:open"), 2), (m_button(u, "cmp:new"), 3), (m_list(u, category), 4),
+                   (m_text(u, text), 5), (m_image(u), 6), (m_button(u, "cmp:evidence:done"), 7),
+                   (m_location(u, 25.6912, 85.1720), 8), (m_button(u, "cmp:confirm"), 10)):
+        send(u, msg)
+        wait_out(u, n)
+    return scalar(f"select complaint_id from grievance.complaints where citizen_wa_hash = '{hash_of(u)}'")
+
+
+def test_officer(cid):
+    """A field officer of the complaint's department (as the portal would create)."""
+    name = f"flow.officer.{SEQ[0]}"
+    return scalar(f"insert into grievance.portal_users (username, password_hash, full_name, role, department_id) "
+                  f"select '{name}', 'x', 'Flow Officer', 'field_officer', department_id "
+                  f"from grievance.complaints where complaint_id = '{cid}' returning user_id")
+
+
+# The same statements, in the same order and transaction shape, as the portal's
+# assign / start / close routes (portal/src/routes/complaints.js, closure.js).
+def portal_assign(cid, officer):
+    sql(f"begin; update grievance.complaints set assigned_officer_user_id = {officer}, status = 'assigned' where complaint_id = '{cid}'; "
+        f"insert into grievance.complaint_status_history (complaint_id, from_status, to_status, changed_by_user_id, remark) "
+        f"values ('{cid}', 'open', 'assigned', {officer}, 'Assigned to Flow Officer'); commit;")
+
+
+def portal_start(cid, officer):
+    sql(f"begin; update grievance.complaints set status = 'in_progress' where complaint_id = '{cid}'; "
+        f"insert into grievance.complaint_status_history (complaint_id, from_status, to_status, changed_by_user_id, remark) "
+        f"values ('{cid}', 'assigned', 'in_progress', {officer}, 'Work started'); commit;")
+
+
+def portal_close(cid, officer, remark):
+    sql(f"begin; insert into grievance.complaint_status_history (complaint_id, from_status, to_status, changed_by_user_id, remark) "
+        f"values ('{cid}', 'in_progress', 'closed', {officer}, '{remark}'); "
+        f"insert into grievance.complaint_evidence (complaint_id, uploaded_by, uploaded_by_user_id, file_path, mime_type, kind, sha256) "
+        f"values ('{cid}', 'officer', {officer}, 'officer/{cid}/proof.jpg', 'image/jpeg', 'photo', '{'0' * 64}'); "
+        f"update grievance.complaints set status = 'closed', closed_at = now() where complaint_id = '{cid}'; commit;")
+
+
+def poll_until_sent(cid, template_key, timeout=20):
+    """Run core-11-notify-poll now (the every-minute schedule may also pick the row up first)."""
+    run_workflow(NOTIFY_WF)
+    end = time.time() + timeout
+    while time.time() < end:
+        st = scalar(f"select status from grievance.notification_outbox where complaint_id = '{cid}' and template_key = '{template_key}'")
+        if st in ("sent", "failed"):
+            return st
+        time.sleep(0.5)
+    raise AssertionError(f"{template_key} for {cid} still {st}")
+
+
+def template_params(c):
+    return [p["text"] for p in c["payload"]["template"]["components"][0]["parameters"]]
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_status_changes_reach_the_citizen_as_whatsapp_templates():
+    u = user()
+    cid = register_complaint(u)
+    assert scalar(f"select count(*) from grievance.notification_outbox where complaint_id = '{cid}'") == "0", \
+        "filing a complaint is confirmed in the chat itself, not through the outbox"
+    officer = test_officer(cid)
+    n0 = len(out_to(u))
+
+    portal_assign(cid, officer)
+    assert poll_until_sent(cid, "status_assigned") == "sent"
+    out = wait_out(u, n0 + 1)
+    tpl = out[-1]["payload"]
+    assert tpl["type"] == "template" and tpl["template"]["name"] == "complaint_update", summary(out[-1])
+    assert tpl["template"]["language"]["code"] == "en", "the citizen wrote in English"
+    assert template_params(out[-1]) == [cid, "Assigned to an officer", "An officer will look into it."], template_params(out[-1])
+    assert "Flow Officer" not in json.dumps(tpl), "staff names stay internal"
+
+    portal_start(cid, officer)
+    assert poll_until_sent(cid, "status_in_progress") == "sent"
+    out = wait_out(u, n0 + 2)
+    assert template_params(out[-1])[1] == "In progress", template_params(out[-1])
+
+    portal_close(cid, officer, "Replaced the pump washer; water flowing again")
+    assert poll_until_sent(cid, "status_closed") == "sent"
+    out = wait_out(u, n0 + 3)
+    assert template_params(out[-1]) == [cid, "Resolved and closed", "Replaced the pump washer; water flowing again"], template_params(out[-1])
+    assert len(out) == n0 + 3, [summary(c) for c in out[n0:]]
+
+    # logged like every other outbound message, with the WhatsApp message id
+    h = hash_of(u)
+    sent = sql(f"select out_id from grievance.notification_outbox where complaint_id = '{cid}' order by id")
+    assert len(sent) == 3 and all(r[0].startswith("wamid.mock.") for r in sent), sent
+    logged = scalar(f"select count(*) from core.message_log where wa_hash = '{h}' and direction = 'out' "
+                    f"and service_key = 'complaint' and wa_msg_id in (select out_id from grievance.notification_outbox where complaint_id = '{cid}')")
+    assert logged == "3", logged
+
+    # nothing is sent twice: a later poll finds nothing due
+    r = run_workflow(NOTIFY_WF)
+    assert r["claimed"] == 0, r
+    wait_quiet(2)
+    assert len(out_to(u)) == n0 + 3
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_update_that_cannot_be_delivered_is_retried_then_alerted():
+    u = user()
+    cid = register_complaint(u)
+    officer = test_officer(cid)
+    http("POST", f"{GRAPH}/__fail_to", {"to": u})
+    a0 = len(out_to(ADMIN))
+
+    portal_assign(cid, officer)
+    run_workflow(NOTIFY_WF)
+    end = time.time() + 20
+    while time.time() < end:
+        row = sql(f"select status, attempts, last_error, next_attempt_at > now() from grievance.notification_outbox where complaint_id = '{cid}'")[0]
+        if row[1] != "0" and row[0] != "sending":
+            break
+        time.sleep(0.5)
+    assert row[0] == "pending" and row[1] == "1" and "131026" in row[2] and row[3] == "t", \
+        f"first failure is retried later, not dropped: {row}"
+    assert len(out_to(ADMIN)) == a0, "no alert for a failure that will be retried"
+
+    # the 5th failed attempt is final, and the admins hear about it once
+    sql(f"update grievance.notification_outbox set attempts = 4, next_attempt_at = now() where complaint_id = '{cid}'")
+    assert poll_until_sent(cid, "status_assigned") == "failed"
+    out = wait_out(ADMIN, a0 + 1)
+    alert = out[-1]["payload"]
+    assert alert["template"]["name"] == "admin_alert", summary(out[-1])
+    text = alert["template"]["components"][0]["parameters"][0]["text"]
+    assert cid in text and "NOT delivered" in text, text
+    assert scalar(f"select attempts from grievance.notification_outbox where complaint_id = '{cid}'") == "5"
+
+
 # ---------------------------------------------------------------- runner ---
 def main():
     ap = argparse.ArgumentParser()

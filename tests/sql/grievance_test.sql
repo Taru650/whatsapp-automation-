@@ -91,8 +91,9 @@ BEGIN
     -- notification outbox
     INSERT INTO grievance.notification_outbox (complaint_id, wa_hash, template_key, payload)
         VALUES ('SCB-TEST-000001', 'wa1', 'status_update', '{"status":"closed"}');
-    ASSERT (SELECT status FROM grievance.notification_outbox WHERE complaint_id = 'SCB-TEST-000001') = 'pending',
+    ASSERT (SELECT status FROM grievance.notification_outbox WHERE complaint_id = 'SCB-TEST-000001' AND template_key = 'status_update') = 'pending',
         'a new notification starts pending';
+    -- (the close above also queued its own status_closed row: sql/33_notify.sql, tested in notify_test.sql)
 
     RAISE NOTICE 'grievance_test: all assertions passed';
 END $$;

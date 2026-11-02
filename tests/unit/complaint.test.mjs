@@ -5,7 +5,6 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { complaintHandle, complaintReceiptMessage, haversineM } = require('../../n8n/src/services/complaint.js');
-const { buildStatusNotification } = require('../../n8n/src/services/complaint_notify.js');
 const { validateServiceOutput } = require('../../n8n/src/core/contract.js');
 const { renderMessage } = require('../../n8n/src/core/render.js');
 
@@ -162,14 +161,4 @@ test('haversineM: zero at the same point, realistic over ~1 degree latitude', ()
   assert.equal(haversineM(25.69, 85.17, 25.69, 85.17), 0);
   const d = haversineM(25.0, 85.0, 26.0, 85.0);
   assert.ok(d > 110000 && d < 112000, String(d));
-});
-
-test('buildStatusNotification: status label and an optional remark, both languages', () => {
-  const en = buildStatusNotification({ complaint_id: 'SCB-2026-C00001', status: 'resolved', remark: 'Pipe fixed' }, 'en');
-  assert.match(en[0].body, /SCB-2026-C00001/);
-  assert.match(en[0].body, /Resolved/);
-  assert.match(en[0].body, /Pipe fixed/);
-  const hi = buildStatusNotification({ complaint_id: 'SCB-2026-C00001', status: 'closed' }, 'hi');
-  assert.match(hi[0].body, /बंद/);
-  assert.doesNotMatch(hi[0].body, /Note:/);
 });

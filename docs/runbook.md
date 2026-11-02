@@ -120,6 +120,52 @@ as Metabase: `ssh -N -L 3001:127.0.0.1:3001 <user>@<tailscale-name>`, then open
 | Portal logs | `dc logs --tail 200 portal` |
 | Health | `curl -s localhost:3001/portal/healthz` → `{"ok":true}` |
 
+### Status updates to citizens on WhatsApp
+
+When a complaint is **assigned**, **started** or **closed** in the portal, the
+citizen gets one WhatsApp message for each (re-assigning or moving it to
+another department does not send a second "assigned"). The portal only queues
+the update (`grievance.notification_outbox`, written in the same transaction
+as the status change); n8n's `core-11-notify-poll` sends it within a minute
+through the normal send path and logs it like any other message. Each
+complaint page shows *WhatsApp updates to the citizen*: Queued / Sent /
+Retrying / Failed.
+
+**Before go-live: the `complaint_update` template must be approved by Meta.**
+These updates usually go out days after the citizen last wrote, outside
+WhatsApp's 24-hour window, so they are always sent as a template. Without an
+approved template every update fails (the page shows *Failed*, admins get one
+alert per batch). In WhatsApp Manager → Message templates → Create:
+
+- Category **Utility**, name `complaint_update` (or set `COMPLAINT_UPDATE_TEMPLATE`), languages **English (en)** and **Hindi (hi)**, same name for both.
+- Body, English:
+  ```
+  Update on your complaint {{1}}.
+  Status: {{2}}
+  Note: {{3}}
+  To see the details, send this complaint number to us on WhatsApp.
+  ```
+- Body, Hindi:
+  ```
+  आपकी शिकायत {{1}} पर अपडेट।
+  स्थिति: {{2}}
+  टिप्पणी: {{3}}
+  विवरण देखने के लिए यह शिकायत संख्या हमें WhatsApp पर भेजें।
+  ```
+- Samples for review: `SCB-2026-C00012`, `Resolved and closed` / `हल होकर बंद`, `Replaced the handpump washer`.
+
+The note ({{3}}) is a fixed line for "assigned" and "started", and the closing
+officer's remark for "closed". Assignment remarks and staff names are never
+sent. A remark that contains anything that looks like a phone number is replaced
+by "The issue has been resolved." so an unverified number never reaches a citizen.
+
+| Task | How |
+|---|---|
+| Updates not going out | complaint page shows *Failed* with the error; most likely the template isn't approved (Meta error 132001) or was renamed |
+| Undelivered updates | `... -c "select complaint_id, template_key, attempts, last_error from grievance.notification_outbox where status = 'failed' order by id desc limit 50"` |
+| Send failed ones again (after fixing the cause) | `... -c "update grievance.notification_outbox set status = 'pending', attempts = 0, next_attempt_at = now() where status = 'failed'"` |
+| Retry policy | 5 attempts (after 2, 4, 8, 16 minutes), then *Failed* and one admin alert; a citizen with no number on record (purged after 180 days of silence) fails at once |
+
 ## Monitoring
 - **UptimeRobot, HTTP monitor:** `https://PUBLIC_HOST/webhook/health` every 5 min.
   Down means citizens get no answers.

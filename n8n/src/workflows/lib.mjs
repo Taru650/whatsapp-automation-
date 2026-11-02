@@ -24,6 +24,7 @@ export const IDS = {
   mela: 'SvcMela000000001',
   syncMela: 'SyncMela00000001',
   complaint: 'SvcComplaint0001',
+  notify: 'CoreNotify000001',
 };
 
 // Source of a module from n8n/src, with the CommonJS export line removed.

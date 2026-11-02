@@ -8,7 +8,9 @@
   for the fixed set of test media ids below (svc-complaint's evidence download)
 * GET  /__media/<media-id>    -> the (fake) bytes for that media id
 * GET  /__captured   -> JSON list of every accepted/rejected request
-* POST /__reset      -> clear captures
+* POST /__reset      -> clear captures (and any /__fail_to recipients)
+* POST /__fail_to    -> {"to": "<number>"}: every later send to that number gets
+  HTTP 400 (Meta's "message undeliverable", code 131026) until /__reset
 
 Stdlib only. Usage: python tests/mocks/graph_api.py --port 8081
 """
@@ -21,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 LOCK = threading.Lock()
 CAPTURED = []
 COUNTER = [0]
+FAIL_TO = set()
 
 # Fixed test media ids for svc-complaint's evidence download (n8n/src/core/media.js).
 MEDIA_FIXTURES = {
@@ -86,8 +89,18 @@ def validate(p):
         if not isinstance(loc.get("latitude"), (int, float)) or not isinstance(loc.get("longitude"), (int, float)):
             errs.append("location lat/lon")
     elif t == "template":
-        if not p["template"].get("name"):
+        tpl = p["template"]
+        if not tpl.get("name"):
             errs.append("template name")
+        if not (tpl.get("language") or {}).get("code"):
+            errs.append("template language")
+        for c in tpl.get("components") or []:
+            for prm in c.get("parameters") or []:
+                v = prm.get("text") if prm.get("type") == "text" else "x"
+                # Meta (error 132018): variables may not be empty or hold newlines,
+                # tabs or more than four consecutive spaces
+                if not v or "\n" in v or "\t" in v or "     " in v:
+                    errs.append(f"template parameter: {v!r}")
     else:
         errs.append(f"unknown type {t}")
     return errs
@@ -135,6 +148,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/__reset":
             with LOCK:
                 CAPTURED.clear()
+                FAIL_TO.clear()
+            return self._send(200, {"ok": True})
+        if self.path == "/__fail_to":
+            with LOCK:
+                FAIL_TO.add(json.loads(raw)["to"])
             return self._send(200, {"ok": True})
         if not self.path.endswith("/messages"):
             return self._send(404, {"error": "not found"})
@@ -150,6 +168,10 @@ class Handler(BaseHTTPRequestHandler):
             CAPTURED.append({"n": n, "ts": time.time(), "path": self.path, "payload": payload, "errors": errs, "auth": auth_ok})
         if errs:
             return self._send(400, {"error": {"message": "; ".join(errs), "type": "OAuthException", "code": 100}})
+        with LOCK:
+            fail = payload.get("to") in FAIL_TO
+        if fail:
+            return self._send(400, {"error": {"message": "Message undeliverable", "type": "OAuthException", "code": 131026}})
         self._send(200, {"messaging_product": "whatsapp", "contacts": [{"wa_id": payload.get("to")}],
                          "messages": [{"id": f"wamid.mock.{n}"}]})
 

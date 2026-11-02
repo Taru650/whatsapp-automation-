@@ -118,6 +118,28 @@
       </li>
       <% } %>
     </ol>
+
+    <h2 class="h6">WhatsApp updates to the citizen</h2>
+    <% if (!notices.length) { %>
+    <p class="small text-muted">None yet. The citizen is sent an update when the complaint is assigned, started and closed.</p>
+    <% } else { %>
+    <ul class="list-group mb-3" id="notices">
+      <% for (const n of notices) { %>
+      <li class="list-group-item d-flex justify-content-between align-items-start gap-2">
+        <div>
+          <div><strong><%= STATUS_LABEL[n.status] || n.status %></strong></div>
+          <div class="small text-muted">
+            <% if (n.delivery === 'sent') { %>Delivered to WhatsApp <%= fmtTime(n.sent_at) %>
+            <% } else if (n.delivery === 'failed') { %>Not delivered after <%= n.attempts %> attempt<%= n.attempts === 1 ? '' : 's' %><%= n.last_error ? ': ' + n.last_error.slice(0, 120) : '' %>
+            <% } else if (n.attempts > 0 && n.delivery === 'pending') { %>Retrying (attempt <%= n.attempts %> failed), next try <%= fmtTime(n.next_attempt_at) %>
+            <% } else { %>Queued <%= fmtTime(n.created_at) %>, goes out within a minute<% } %>
+          </div>
+        </div>
+        <span class="badge <%= { sent: 'text-bg-success', failed: 'text-bg-danger' }[n.delivery] || 'text-bg-secondary' %>"><%= { sent: 'Sent', failed: 'Failed', sending: 'Sending', pending: n.attempts > 0 ? 'Retrying' : 'Queued' }[n.delivery] %></span>
+      </li>
+      <% } %>
+    </ul>
+    <% } %>
   </div>
 </div>
 <p><a href="<%= base %>/complaints">← All complaints</a></p>

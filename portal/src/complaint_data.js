@@ -30,7 +30,7 @@ export async function loadDetail(pool, u, id) {
   const { rows } = await pool.query(`${BASE_SELECT} where c.complaint_id = $2`, [u.user_id, id]);
   const c = rows[0];
   if (!c) return null;
-  const [evidence, history, officers, departments] = await Promise.all([
+  const [evidence, history, officers, departments, notices] = await Promise.all([
     pool.query(`select e.id, e.uploaded_by, e.mime_type, e.kind, e.ts, p.full_name
                 from grievance.complaint_evidence e left join grievance.portal_users p on p.user_id = e.uploaded_by_user_id
                 where e.complaint_id = $1 order by e.ts, e.id`, [c.complaint_id]),
@@ -44,13 +44,16 @@ export async function loadDetail(pool, u, id) {
     u.role === 'district_admin'
       ? pool.query('select department_id, name_en from grievance.departments where enabled order by name_en')
       : { rows: [] },
+    // WhatsApp updates to the citizen (sql/33_notify.sql): never the number, only whether it got through
+    pool.query(`select payload->>'status' as status, status as delivery, attempts, last_error, created_at, sent_at, next_attempt_at
+                from grievance.notification_outbox where complaint_id = $1 order by id`, [c.complaint_id]),
   ]);
   const closure = c.status === 'closed' ? history.rows.filter((h) => h.to_status === 'closed').at(-1) || null : null;
   return {
     title: c.complaint_id, c, history: history.rows, closure,
     citizenEvidence: evidence.rows.filter((e) => e.uploaded_by === 'citizen'),
     officerEvidence: evidence.rows.filter((e) => e.uploaded_by === 'officer'),
-    officers: officers.rows, departments: departments.rows,
+    officers: officers.rows, departments: departments.rows, notices: notices.rows,
     can: {
       assign: ['district_admin', 'dept_head'].includes(u.role) && statusAfterAssign(c.status) !== null,
       start: canStart(c.status),
