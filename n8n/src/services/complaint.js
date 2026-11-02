@@ -178,8 +178,9 @@ function locationReceived(req, snap, ctx, input) {
   const geo = snap.geofence || {};
   const enabled = geo.enabled === true || geo.enabled === 'true';
   if (enabled) {
-    const centerLat = Number(geo.center_lat);
-    const centerLon = Number(geo.center_lon);
+    const num = (v) => (v === null || v === undefined || v === '' ? NaN : Number(v)); // Number(null) is 0
+    const centerLat = num(geo.center_lat);
+    const centerLon = num(geo.center_lon);
     const radius = Number(geo.radius_m) || 500;
     if (Number.isFinite(centerLat) && Number.isFinite(centerLon)) {
       const d = haversineM(input.lat, input.lon, centerLat, centerLon);

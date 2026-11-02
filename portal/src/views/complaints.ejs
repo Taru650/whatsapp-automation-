@@ -1,0 +1,70 @@
+<%- include('partials/head') %>
+<h1 class="h4 mb-3">Complaints</h1>
+<form class="row g-2 mb-3" method="get" action="<%= base %>/complaints">
+  <div class="col-12 col-md-3">
+    <input class="form-control" name="q" value="<%= f.q %>" placeholder="Complaint ID, e.g. SCB-2026-C00012" aria-label="Complaint ID">
+  </div>
+  <div class="col-6 col-md-2">
+    <select class="form-select" name="status" aria-label="Status">
+      <option value="">Any status</option>
+      <% for (const s of ['open', 'assigned', 'in_progress', 'resolved', 'closed']) { %>
+      <option value="<%= s %>" <%= f.status === s ? 'selected' : '' %>><%= STATUS_LABEL[s] %></option>
+      <% } %>
+    </select>
+  </div>
+  <div class="col-6 col-md-3">
+    <select class="form-select" name="category" aria-label="Category">
+      <option value="">Any category</option>
+      <% for (const c of categories) { %>
+      <option value="<%= c.category_key %>" <%= f.category === c.category_key ? 'selected' : '' %>><%= c.label_en %> · <%= c.label_hi %></option>
+      <% } %>
+    </select>
+  </div>
+  <% if (user.role === 'district_admin') { %>
+  <div class="col-6 col-md-2">
+    <select class="form-select" name="department" aria-label="Department">
+      <option value="">Any department</option>
+      <% for (const d of departments) { %>
+      <option value="<%= d.department_id %>" <%= f.department === d.department_id ? 'selected' : '' %>><%= d.name_en %></option>
+      <% } %>
+    </select>
+  </div>
+  <% } %>
+  <div class="col-6 col-md-auto d-flex align-items-center">
+    <div class="form-check">
+      <input class="form-check-input" type="checkbox" name="overdue" value="1" id="overdue" <%= f.overdue ? 'checked' : '' %>>
+      <label class="form-check-label" for="overdue">Overdue only</label>
+    </div>
+  </div>
+  <div class="col-12 col-md-auto"><button class="btn btn-outline-primary w-100">Filter</button></div>
+</form>
+
+<% if (!complaints.length) { %>
+<p class="text-muted">No complaints match.</p>
+<% } else { %>
+<div class="table-responsive">
+<table class="table table-sm align-middle">
+  <thead><tr><th>ID</th><th>Category</th><th class="d-none d-md-table-cell">Department</th><th>Status</th><th class="d-none d-sm-table-cell">Officer</th><th class="d-none d-md-table-cell">Filed</th></tr></thead>
+  <tbody>
+  <% for (const c of complaints) { %>
+    <tr>
+      <td><a href="<%= base %>/complaints/<%= c.complaint_id %>"><%= c.complaint_id %></a></td>
+      <td><%= c.category_en %></td>
+      <td class="d-none d-md-table-cell"><%= c.department_en %></td>
+      <td><span class="badge <%= STATUS_BADGE[c.status] %>"><%= STATUS_LABEL[c.status] %></span><% if (c.overdue) { %> <span class="badge text-bg-danger">Overdue</span><% } %></td>
+      <td class="d-none d-sm-table-cell"><%= c.officer_name || '—' %></td>
+      <td class="d-none d-md-table-cell small"><%= fmtTime(c.created_at) %></td>
+    </tr>
+  <% } %>
+  </tbody>
+</table>
+</div>
+<% } %>
+<%
+  const qs = (p) => new URLSearchParams(Object.entries({ ...f, overdue: f.overdue ? '1' : '', page: String(p) }).filter(([, v]) => v !== '' && v !== false)).toString();
+%>
+<nav class="d-flex gap-2">
+  <% if (page > 1) { %><a class="btn btn-sm btn-outline-secondary" href="<%= base %>/complaints?<%= qs(page - 1) %>">← Newer</a><% } %>
+  <% if (hasMore) { %><a class="btn btn-sm btn-outline-secondary" href="<%= base %>/complaints?<%= qs(page + 1) %>">Older →</a><% } %>
+</nav>
+<%- include('partials/foot') %>

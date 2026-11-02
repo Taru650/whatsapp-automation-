@@ -1,0 +1,35 @@
+<%- include('partials/head') %>
+<div class="row justify-content-center">
+  <div class="col-md-8 col-lg-6">
+    <h1 class="h4 mb-2">Complaint area (geofence)</h1>
+    <p class="text-muted">While this is on, citizens can register a complaint on WhatsApp only from within this circle (their shared location is checked). Changes apply to the very next WhatsApp message.</p>
+    <% if (error) { %><div class="alert alert-danger" role="alert"><%= error %></div><% } %>
+    <form method="post" action="<%= base %>/settings/geofence">
+      <input type="hidden" name="_csrf" value="<%= csrf %>">
+      <div class="form-check form-switch mb-3">
+        <input class="form-check-input" type="checkbox" role="switch" id="enabled" name="enabled" <%= g.enabled ? 'checked' : '' %>>
+        <label class="form-check-label" for="enabled">Only accept complaints from inside the area</label>
+      </div>
+      <div class="row g-2 mb-3">
+        <div class="col-6">
+          <label class="form-label" for="lat">Centre latitude</label>
+          <input class="form-control" id="lat" name="lat" value="<%= g.lat %>" inputmode="decimal" placeholder="25.6920">
+        </div>
+        <div class="col-6">
+          <label class="form-label" for="lon">Centre longitude</label>
+          <input class="form-control" id="lon" name="lon" value="<%= g.lon %>" inputmode="decimal" placeholder="85.1750">
+        </div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="radius">Radius (metres)</label>
+        <input class="form-control" id="radius" name="radius" value="<%= g.radius %>" inputmode="numeric" required>
+      </div>
+      <p class="small text-muted">Tip: open Google Maps, long-press the middle of the Mela ground and copy the two numbers shown.</p>
+      <% if (g.lat !== '' && g.lon !== '') { %>
+      <p><a rel="noopener" target="_blank" href="https://www.google.com/maps/search/?api=1&amp;query=<%= g.lat %>,<%= g.lon %>">Check the current centre on the map</a></p>
+      <% } %>
+      <button class="btn btn-primary">Save</button>
+    </form>
+  </div>
+</div>
+<%- include('partials/foot') %>

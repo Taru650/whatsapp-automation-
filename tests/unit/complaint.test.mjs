@@ -104,6 +104,11 @@ test('complaint: geofence rejects outside the radius, accepts inside it, and is 
   o = ok(complaintHandle(req({ kind: 'location', lat: 25.6905, lon: 85.1705 }, { state: 'cmp.location', context: ctx }), geoOn));
   assert.equal(o.next_state, 'cmp.confirm', 'inside the geofence: proceeds to confirm');
 
+  // enabled but no centre point set: never measure from (0,0) and reject everyone
+  const geoNoCentre = snapFixture({ geofence: { enabled: true, center_lat: null, center_lon: null, radius_m: 500 } });
+  o = ok(complaintHandle(req({ kind: 'location', lat: 25.69, lon: 85.17 }, { state: 'cmp.location', context: ctx }), geoNoCentre));
+  assert.equal(o.next_state, 'cmp.confirm', 'a geofence with no centre does not block complaints');
+
   const geoOff = snapFixture();
   o = ok(complaintHandle(req({ kind: 'location', lat: 1, lon: 1 }, { state: 'cmp.location', context: ctx }), geoOff));
   assert.equal(o.next_state, 'cmp.confirm', 'geofence disabled: any location is accepted');

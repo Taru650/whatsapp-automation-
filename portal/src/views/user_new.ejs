@@ -1,0 +1,51 @@
+<%- include('partials/head') %>
+<div class="row justify-content-center">
+  <div class="col-md-8 col-lg-6">
+    <h1 class="h4 mb-3">New staff account</h1>
+    <% if (error) { %><div class="alert alert-danger" role="alert"><%= error %></div><% } %>
+    <form method="post" action="<%= base %>/users/new">
+      <input type="hidden" name="_csrf" value="<%= csrf %>">
+      <div class="mb-3">
+        <label class="form-label" for="full_name">Full name</label>
+        <input class="form-control" id="full_name" name="full_name" value="<%= form.full_name || '' %>" maxlength="80" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="username">Username <span class="text-muted small">(lower-case, e.g. ravi.kumar)</span></label>
+        <input class="form-control" id="username" name="username" value="<%= form.username || '' %>" autocapitalize="none" maxlength="32" required>
+      </div>
+      <% if (roles.length > 1) { %>
+      <div class="mb-3">
+        <label class="form-label" for="role">Role</label>
+        <select class="form-select" id="role" name="role" required>
+          <% for (const r of roles) { %>
+          <option value="<%= r %>" <%= (form.role || 'field_officer') === r ? 'selected' : '' %>><%= ROLE_LABEL[r] %></option>
+          <% } %>
+        </select>
+      </div>
+      <% } else { %>
+      <input type="hidden" name="role" value="<%= roles[0] %>">
+      <p>Role: <strong><%= ROLE_LABEL[roles[0]] %></strong></p>
+      <% } %>
+      <% if (user.role === 'district_admin') { %>
+      <div class="mb-3">
+        <label class="form-label" for="department_id">Department <span class="text-muted small">(not needed for a district admin)</span></label>
+        <select class="form-select" id="department_id" name="department_id">
+          <option value="">—</option>
+          <% for (const d of departments) { %>
+          <option value="<%= d.department_id %>" <%= String(form.department_id) === String(d.department_id) ? 'selected' : '' %>><%= d.name_en %> · <%= d.name_hi %></option>
+          <% } %>
+        </select>
+      </div>
+      <% } else { %>
+      <p>Department: <strong><%= user.department_en %></strong></p>
+      <% } %>
+      <div class="mb-3">
+        <label class="form-label" for="password">First password <span class="text-muted small">(at least 10 characters; they must change it at first sign-in)</span></label>
+        <input class="form-control" id="password" name="password" type="password" autocomplete="new-password" minlength="10" required>
+      </div>
+      <button class="btn btn-primary">Create account</button>
+      <a class="btn btn-link" href="<%= base %>/users">Cancel</a>
+    </form>
+  </div>
+</div>
+<%- include('partials/foot') %>

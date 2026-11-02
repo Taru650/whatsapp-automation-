@@ -167,6 +167,34 @@ services:
     ports:
       - "127.0.0.1:${METABASE_HOST_PORT:-3000}:3000"
 
+  # Complaint portal for staff (portal/). Bound to 127.0.0.1 like n8n and Metabase:
+  # reach it over Tailscale / an SSH tunnel until M9 adds the public /portal path to
+  # Caddy. Own profile, so stacks that don't run it yet need none of its settings.
+  #   docker compose --profile portal up -d portal
+  #   docker compose run --rm portal node scripts/create_user.mjs --role district_admin --username <u> --name "<name>"
+  portal:
+    build: ./portal
+    profiles: ["portal"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ENV: ${ENV:-prod}
+      PORTAL_DB_HOST: postgres
+      PORTAL_DB_NAME: citizen_bot
+      PORTAL_DB_USER: portal_rw
+      PORTAL_DB_PASSWORD: ${PORTAL_DB_PASSWORD:-}
+      PORTAL_SESSION_SECRET: ${PORTAL_SESSION_SECRET:-}   # the app refuses to start without a real one
+      PORTAL_BCRYPT_ROUNDS: ${PORTAL_BCRYPT_ROUNDS:-12}
+      PORTAL_TRUST_PROXY: ${PORTAL_TRUST_PROXY:-0}
+      COMPLAINT_MEDIA_PATH: /data/complaint-media
+      TZ: Asia/Kolkata
+    volumes:
+      - complaint_media:/data/complaint-media
+    ports:
+      - "127.0.0.1:${PORTAL_HOST_PORT:-3001}:3001"
+
   # Office machine: outbound-only Cloudflare Tunnel -> caddy (no inbound ports, no static IP).
   cloudflared:
     image: cloudflare/cloudflared:2025.9.1
@@ -207,6 +235,7 @@ services:
       ADMIN_WA_NUMBERS: ${ADMIN_WA_NUMBERS:-}
       PHONE_HASH_SECRET: ${PHONE_HASH_SECRET}
       METABASE_DB_PASSWORD: ${METABASE_DB_PASSWORD:-}
+      PORTAL_DB_PASSWORD: ${PORTAL_DB_PASSWORD:-}   # creates/updates the portal_rw login
     entrypoint: ["bash", "scripts/db_migrate.sh"]
 
   metabase-setup:

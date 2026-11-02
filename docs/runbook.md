@@ -95,6 +95,31 @@ With no data, screens still work but say "no places/events found".
 | Re-send a day's report | `curl` is not exposed; in the n8n editor open `core-85-daily-report` → *Execute workflow* (yesterday), or `... -c "select analytics.daily_report('2026-11-25')->>'text'"` |
 | Emergency UI hotfix | fix in the UI, then `scripts/n8n_export.sh`, port it to `n8n/src`, rebuild, redeploy |
 
+## Complaint portal (staff)
+
+Staff manage WhatsApp complaints at `/portal` (code in `portal/`). Until the
+public go-live step it listens on `127.0.0.1:3001` only — reach it the same way
+as Metabase: `ssh -N -L 3001:127.0.0.1:3001 <user>@<tailscale-name>`, then open
+`http://localhost:3001/portal/`.
+
+**First start**
+1. In `.env`: `PORTAL_DB_PASSWORD` and `PORTAL_SESSION_SECRET` (both `openssl rand -hex 32`).
+2. `dc run --rm migrate` (creates the `portal_rw` login; it can read the complaint data and nothing else — no citizen phone numbers).
+3. `dc --profile portal up -d --build portal`
+4. Create the first district admin (the password is typed, not echoed):
+   `dc run --rm portal node scripts/create_user.mjs --role district_admin --username <u> --name "<full name>"`
+5. Sign in, open **Staff** and create the department heads; each head creates their own field officers.
+
+| Task | How |
+|---|---|
+| Deploy a new portal version | `git pull && dc run --rm migrate && dc --profile portal up -d --build portal` |
+| Someone forgot their password | their department head (or the district admin) → **Staff** → *Reset password*; the one-time password is shown once, give it by phone |
+| District admin locked out | another district admin resets it; if there is none, create a new admin with `create_user.mjs` |
+| Someone leaves | **Staff** → *Disable* — they are signed out on their next click |
+| Who did what | `... -c "select ts, user_id, action, target, detail from grievance.portal_audit order by id desc limit 50"` |
+| Portal logs | `dc logs --tail 200 portal` |
+| Health | `curl -s localhost:3001/portal/healthz` → `{"ok":true}` |
+
 ## Monitoring
 - **UptimeRobot, HTTP monitor:** `https://PUBLIC_HOST/webhook/health` every 5 min.
   Down means citizens get no answers.
