@@ -289,10 +289,18 @@ def status_callback_does_nothing():
     payload = envelope([], u)
     del payload["entry"][0]["changes"][0]["value"]["messages"]
     payload["entry"][0]["changes"][0]["value"]["statuses"] = [{"id": "wamid.x", "status": "read", "recipient_id": u}]
-    before = scalar("select count(*) from core.message_log")
+    h = hash_of(u)
+    started = scalar("select now()")
     assert post(payload)[0] == 200
     wait_quiet()
-    assert out_to(u) == [] and scalar("select count(*) from core.message_log") == before
+    assert out_to(u) == [], [summary(c) for c in out_to(u)]
+    # Scoped to what this callback could write: a whole-table row count also counted
+    # other scenarios' late log writes and the every-minute notification poll, and
+    # failed intermittently in CI for reasons unrelated to status callbacks.
+    logged = scalar(f"select count(*) from core.message_log where ts >= '{started}' "
+                    f"and (wa_hash in ('{h}', 'unknown') or wa_msg_id = 'wamid.x')")
+    assert logged == "0", f"a status callback was logged: {logged} row(s)"
+    assert scalar(f"select count(*) from core.citizens where wa_hash = '{h}'") == "0", "a status callback created a citizen"
 
 
 @scenario
