@@ -13,11 +13,15 @@ export function loadConfig(env = process.env) {
     sessionSecret: secret || 'test-only-session-secret-not-for-production',
     bcryptRounds: Number(env.PORTAL_BCRYPT_ROUNDS || 12),
     mediaPath: env.COMPLAINT_MEDIA_PATH || '/data/complaint-media',
-    // 0 while the portal is reached directly (M6, localhost/Tailscale); set to the
-    // number of proxies in front of it once public (M9: Cloudflare + Caddy).
-    trustProxy: Number(env.PORTAL_TRUST_PROXY || 0),
-    // localhost counts as a secure context, so Secure cookies work over an SSH tunnel too
-    secureCookie: !isTest && env.PORTAL_INSECURE_COOKIE !== 'true',
+    // Hops in front of the portal whose X-Forwarded-* headers are believed: 1 =
+    // Caddy (deploy/Caddyfile hands on exactly one client IP and the original
+    // https). Direct access (SSH tunnel to 127.0.0.1:3001) sends no such headers.
+    trustProxy: Number(env.PORTAL_TRUST_PROXY ?? 1),
+    // 'auto': the cookie is Secure whenever the request came in over https (through
+    // Caddy), and plain over a direct http://localhost SSH tunnel. A hard `true`
+    // made express-session refuse to set any cookie over plain http, so sign-in
+    // through the tunnel always failed with 403 (no session -> no CSRF token).
+    secureCookie: isTest ? false : 'auto',
     loginLimit: Number(env.PORTAL_LOGIN_LIMIT || 5),
     db: {
       host: env.PORTAL_DB_HOST || 'postgres',

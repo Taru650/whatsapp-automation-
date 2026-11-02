@@ -190,7 +190,7 @@ services:
       PORTAL_DB_PASSWORD: ${PORTAL_DB_PASSWORD:-}
       PORTAL_SESSION_SECRET: ${PORTAL_SESSION_SECRET:-}   # the app refuses to start without a real one
       PORTAL_BCRYPT_ROUNDS: ${PORTAL_BCRYPT_ROUNDS:-12}
-      PORTAL_TRUST_PROXY: ${PORTAL_TRUST_PROXY:-0}
+      PORTAL_TRUST_PROXY: ${PORTAL_TRUST_PROXY:-1}   # Caddy, the one proxy in front
       COMPLAINT_MEDIA_PATH: /data/complaint-media
       TZ: Asia/Kolkata
     volumes:
