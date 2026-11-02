@@ -1,6 +1,9 @@
-// Every status change the portal may make, in one place. Resolving/closing
-// arrives in M7 together with the mandatory closure evidence (the DB trigger
-// in sql/30_grievance.sql refuses it without evidence anyway).
+// Every status change the portal may make, in one place. The officer closes
+// directly with proof (no separate "resolved" review step); 'closed' is final.
+
+export function canClose(status) {
+  return status === 'assigned' || status === 'in_progress';
+}
 
 // Assigning (or re-assigning) is allowed until the complaint is resolved.
 export function statusAfterAssign(status) {

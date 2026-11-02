@@ -1,0 +1,12 @@
+<div class="d-flex flex-wrap gap-2 mb-3">
+  <% if (!items.length) { %><span class="text-muted">None.</span><% } %>
+  <% for (const e of items) { %>
+    <% if (e.kind === 'photo') { %>
+      <a href="<%= base %>/media/<%= e.id %>" target="_blank" rel="noopener">
+        <img class="img-thumbnail evidence" src="<%= base %>/media/<%= e.id %>" alt="Photo from the <%= who %>" loading="lazy">
+      </a>
+    <% } else { %>
+      <a class="btn btn-outline-secondary" href="<%= base %>/media/<%= e.id %>" target="_blank" rel="noopener">PDF from the <%= who %></a>
+    <% } %>
+  <% } %>
+</div>

@@ -171,8 +171,11 @@ BEGIN
         IF NOT coalesce(remark_ok, false) THEN
             RAISE EXCEPTION 'closing complaint % requires a remark recorded in complaint_status_history first', NEW.complaint_id;
         END IF;
-        IF NOT EXISTS (SELECT 1 FROM grievance.complaint_evidence WHERE complaint_id = NEW.complaint_id AND kind = 'photo') THEN
-            RAISE EXCEPTION 'closing complaint % requires at least one photo in complaint_evidence', NEW.complaint_id;
+        -- an OFFICER's photo: every complaint already arrives with the citizen's
+        -- intake photo, which proves the problem, not the fix
+        IF NOT EXISTS (SELECT 1 FROM grievance.complaint_evidence
+                       WHERE complaint_id = NEW.complaint_id AND kind = 'photo' AND uploaded_by = 'officer') THEN
+            RAISE EXCEPTION 'closing complaint % requires at least one photo uploaded by an officer', NEW.complaint_id;
         END IF;
     END IF;
     RETURN NEW;

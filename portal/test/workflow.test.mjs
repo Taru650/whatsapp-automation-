@@ -89,9 +89,9 @@ test('only the district admin moves a misfiled complaint; it goes back to open, 
   assert.equal((await s.head.get(`/portal/complaints/${id}`)).status, 404, 'the water head no longer sees it');
 });
 
-test('resolving or closing is not possible in the portal yet (arrives in M7 with evidence)', async () => {
+test('a plain (non-upload) form can never close a complaint', async () => {
   const id = await t.complaint('R1', 'water_supply', 'phed', { status: 'in_progress', officer: u.officer.user_id });
-  assert.equal((await post(s.admin, `/portal/complaints/${id}/close`)).status, 404);
-  assert.equal((await post(s.admin, `/portal/complaints/${id}/start`)).status, 302);
+  const r = await post(s.admin, `/portal/complaints/${id}/close`, { remark: 'done without proof' });
+  assert.equal(r.status, 400);
   assert.equal((await row(id)).status, 'in_progress');
 });

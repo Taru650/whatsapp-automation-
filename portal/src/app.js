@@ -11,6 +11,8 @@ import { complaintRoutes } from './routes/complaints.js';
 import { userRoutes } from './routes/users.js';
 import { settingsRoutes } from './routes/settings.js';
 import { mediaRoutes } from './routes/media.js';
+import { closureRoutes } from './routes/closure.js';
+import { reportRoutes } from './routes/reports.js';
 import { ROLE_LABEL, STATUS_BADGE, STATUS_LABEL, fmtTime } from './labels.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -76,6 +78,8 @@ export function createApp({ pool, config }) {
   r.use(passwordRoutes({ pool, config }));
   r.use(dashboardRoutes({ pool, config }));
   r.use(complaintRoutes({ pool, config }));
+  r.use(closureRoutes({ pool, config }));
+  r.use(reportRoutes({ pool, config }));
   r.use(mediaRoutes({ pool, config }));
   r.use(userRoutes({ pool, config }));
   r.use(settingsRoutes({ pool, config }));

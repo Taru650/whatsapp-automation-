@@ -65,6 +65,16 @@ BEGIN
     END;
     ASSERT failed, 'a remark alone, with no photo evidence, is still rejected';
 
+    -- the citizen's intake photo proves the problem, not the fix
+    INSERT INTO grievance.complaint_evidence (complaint_id, uploaded_by, wa_hash, file_path, mime_type, kind)
+        VALUES ('SCB-TEST-000001', 'citizen', 'wa1', 'wa1/leak.jpg', 'image/jpeg', 'photo');
+    failed := false;
+    BEGIN
+        UPDATE grievance.complaints SET status = 'closed' WHERE complaint_id = 'SCB-TEST-000001';
+    EXCEPTION WHEN OTHERS THEN failed := true;
+    END;
+    ASSERT failed, 'remark + only the citizen''s photo is still rejected: an officer photo is required';
+
     INSERT INTO grievance.complaint_evidence (complaint_id, uploaded_by, uploaded_by_user_id, file_path, mime_type, kind)
         VALUES ('SCB-TEST-000001', 'officer', officer_id, 'SCB-TEST-000001/fix.jpg', 'image/jpeg', 'photo');
     UPDATE grievance.complaints SET status = 'closed', closed_at = now() WHERE complaint_id = 'SCB-TEST-000001';

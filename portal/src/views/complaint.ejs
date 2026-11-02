@@ -26,22 +26,39 @@
       </dl>
     </div></div>
 
-    <h2 class="h6">Citizen's evidence</h2>
-    <div class="d-flex flex-wrap gap-2 mb-3">
-      <% if (!evidence.length) { %><span class="text-muted">None.</span><% } %>
-      <% for (const e of evidence) { %>
-        <% if (e.kind === 'photo') { %>
-          <a href="<%= base %>/media/<%= e.id %>" target="_blank" rel="noopener">
-            <img class="img-thumbnail evidence" src="<%= base %>/media/<%= e.id %>" alt="Photo uploaded by the <%= e.uploaded_by %>" loading="lazy">
-          </a>
-        <% } else { %>
-          <a class="btn btn-outline-secondary" href="<%= base %>/media/<%= e.id %>" target="_blank" rel="noopener">PDF (<%= e.uploaded_by %>)</a>
-        <% } %>
-      <% } %>
+    <% if (closure) { %>
+    <div class="card mb-3 border-success">
+      <div class="card-body">
+        <h2 class="h6 text-success">Officer's proof</h2>
+        <p class="small text-muted mb-2">Closed by <%= closure.full_name || 'staff' %> on <%= fmtTime(closure.ts) %></p>
+        <p class="text-break pre-wrap"><%= closure.remark %></p>
+        <%- include('partials/evidence', { items: officerEvidence, who: 'officer' }) %>
+      </div>
     </div>
+    <% } %>
+
+    <h2 class="h6">Citizen's evidence</h2>
+    <%- include('partials/evidence', { items: citizenEvidence, who: 'citizen' }) %>
   </div>
 
   <div class="col-lg-5">
+    <% if (can.close) { %>
+    <div class="card mb-3 border-success"><div class="card-body">
+      <h2 class="h6">Close with proof</h2>
+      <p class="small text-muted">Closing is final. Attach at least one photo of the completed work and say what was done.</p>
+      <% if (closeError) { %><div class="alert alert-danger py-2" role="alert"><%= closeError %></div><% } %>
+      <form method="post" action="<%= base %>/complaints/<%= c.complaint_id %>/close" enctype="multipart/form-data"
+            data-confirm="Close this complaint? This cannot be undone.">
+        <input type="hidden" name="_csrf" value="<%= csrf %>">
+        <label class="form-label small" for="photos">Photos (JPG/PNG, up to 5, max 10 MB each)</label>
+        <input class="form-control mb-2" id="photos" name="photos" type="file" accept="image/jpeg,image/png" multiple required>
+        <label class="form-label small" for="close-remark">What was done</label>
+        <textarea class="form-control mb-2" id="close-remark" name="remark" rows="3" minlength="5" maxlength="1000" required><%= closeRemark %></textarea>
+        <button class="btn btn-success">Close complaint</button>
+      </form>
+    </div></div>
+    <% } %>
+
     <% if (can.assign) { %>
     <div class="card mb-3"><div class="card-body">
       <h2 class="h6"><%= c.assigned_officer_user_id ? 'Re-assign' : 'Assign' %> to a field officer</h2>
