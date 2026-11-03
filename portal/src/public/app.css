@@ -1,0 +1,5 @@
+.pre-wrap { white-space: pre-wrap; }
+/* Chart.js with maintainAspectRatio:false needs a fixed-height parent, or it grows forever */
+.chart-box { position: relative; height: 240px; }
+.evidence { width: 140px; height: 140px; object-fit: cover; }
+main { max-width: 1200px; }

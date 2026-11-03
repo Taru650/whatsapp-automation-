@@ -24,18 +24,30 @@ change the compose port bindings to 0.0.0.0: Docker bypasses ufw.
    `PGCRYPTO_KEY` and `PHONE_HASH_SECRET` in the office password safe. Losing
    them makes stored credentials and numbers unreadable.
 2. `dc up -d postgres && dc run --rm migrate && dc run --rm import`
-3. Office machine: `dc --profile tunnel up -d`. VPS: `dc --profile vps up -d`
-   (DNS for `PUBLIC_HOST` must point at the VPS).
+3. Office machine: `dc --profile tunnel --profile portal up -d`. VPS:
+   `dc --profile vps --profile portal up -d` (DNS for `PUBLIC_HOST` must point
+   at the VPS). Without `--profile portal` the bot runs exactly as before and
+   `/portal` answers 502.
 4. Cloudflare (office machine): Zero Trust → Tunnels → create a tunnel and
    copy its token into `CLOUDFLARE_TUNNEL_TOKEN`. Public hostname
-   `PUBLIC_HOST` → service `http://caddy:80`. Caddy forwards only `/webhook/wa*`
-   and `/healthz`.
+   `PUBLIC_HOST` → service `http://caddy:80`. Caddy forwards only
+   `/webhook/wa`, `/webhook/health`, `/healthz` and the staff portal under
+   `/portal/`; everything else is 404 (`tests/caddy_probe.sh` proves it).
+   In the Cloudflare dashboard turn on **SSL/TLS → Edge Certificates → Always
+   Use HTTPS**: the portal's session cookie is only marked Secure on https.
 5. Meta → WhatsApp → Configuration:
    - callback URL `https://PUBLIC_HOST/webhook/wa`
    - verify token = `WHATSAPP_VERIFY_TOKEN`
    - subscribe to `messages`
 6. UptimeRobot: monitor `https://PUBLIC_HOST/healthz` every 5 minutes, with
    SMS alerts to the technical owner.
+7. Staff portal (see *Complaint portal* below): set `PORTAL_DB_PASSWORD` and
+   `PORTAL_SESSION_SECRET` **before** step 2, create the first district admin,
+   and add a second UptimeRobot monitor on `https://PUBLIC_HOST/portal/healthz`.
+   Staff sign in at `https://PUBLIC_HOST/portal/`.
+8. **Go-live gate for complaints:** Meta has approved the `complaint_update`
+   template in English and Hindi (see *Status updates to citizens*). Until
+   then, enable the complaint service only on staging.
 
 ## Real-phone check on the Meta test number (15 minutes; M1 gate item)
 Prerequisite: the `mela` service must be enabled and have synced at least
@@ -85,6 +97,7 @@ With no data, screens still work but say "no places/events found".
 | Task | Command |
 |---|---|
 | Deploy a new version | `git pull && dc run --rm migrate && dc stop n8n && dc run --rm import && dc up -d n8n` |
+| AI (LLM) | **Off at launch** (`LLM_ENABLED=false` in `.env`). On: set `LLM_ENABLED=true` and `ANTHROPIC_API_KEY`, then `dc up -d n8n` |
 | Turn the LLM off (no restart) | `dc exec postgres psql -U bot citizen_bot -c "update core.settings set value='false' where key='llm_enabled'"` |
 | Disable/enable a service | `... -c "update core.services set enabled=false where service_key='echo'"` (the menu changes on the next message) |
 | Rotate the WhatsApp token | edit `.env` → `dc up -d n8n` |
@@ -95,12 +108,112 @@ With no data, screens still work but say "no places/events found".
 | Re-send a day's report | `curl` is not exposed; in the n8n editor open `core-85-daily-report` → *Execute workflow* (yesterday), or `... -c "select analytics.daily_report('2026-11-25')->>'text'"` |
 | Emergency UI hotfix | fix in the UI, then `scripts/n8n_export.sh`, port it to `n8n/src`, rebuild, redeploy |
 
+## Complaint portal (staff)
+
+Staff manage WhatsApp complaints at `https://PUBLIC_HOST/portal/` (code in
+`portal/`), through Cloudflare and Caddy. The container itself still listens
+on `127.0.0.1:3001` only; the technical owner can also reach it over SSH:
+`ssh -N -L 3001:127.0.0.1:3001 <user>@<tailscale-name>`, then
+`http://localhost:3001/portal/`.
+
+What protects it on the internet: its own sign-in (bcrypt, 10+ character
+passwords, 5 wrong tries per person per client → 15-minute lockout), sessions
+that end the moment an account is disabled, CSRF tokens on every form, a strict
+content-security policy, HSTS, and a database login that cannot read citizens'
+phone numbers. Caddy passes on the real client IP (Cloudflare's
+`CF-Connecting-IP`, believed only from the tunnel) and caps uploads at 55 MB.
+Recommended extra layer, no code needed: **Cloudflare Zero Trust → Access**,
+an application for `PUBLIC_HOST/portal*` with a one-time e-mail code for your
+staff's addresses, so strangers never even see the sign-in page. Leave
+`/portal/healthz` outside it (a bypass policy) for UptimeRobot.
+
+**First start**
+1. In `.env`: `PORTAL_DB_PASSWORD` and `PORTAL_SESSION_SECRET` (both `openssl rand -hex 32`).
+2. `dc run --rm migrate` (creates the `portal_rw` login; it can read the complaint data and nothing else — no citizen phone numbers).
+3. `dc --profile portal up -d --build portal`
+4. Create the first district admin (the password is typed, not echoed):
+   `dc run --rm portal node scripts/create_user.mjs --role district_admin --username <u> --name "<full name>"`
+5. Sign in, open **Staff** and create the department heads; each head creates their own field officers.
+
+| Task | How |
+|---|---|
+| Deploy a new portal version | `git pull && dc run --rm migrate && dc --profile portal up -d --build portal` |
+| Someone forgot their password | their department head (or the district admin) → **Staff** → *Reset password*; the one-time password is shown once, give it by phone |
+| District admin locked out | another district admin resets it; if there is none, create a new admin with `create_user.mjs` |
+| Someone leaves | **Staff** → *Disable* — they are signed out on their next click |
+| Who did what | `... -c "select ts, user_id, action, target, detail from grievance.portal_audit order by id desc limit 50"` |
+| Portal logs | `dc logs --tail 200 portal` |
+| Health | `curl -s https://PUBLIC_HOST/portal/healthz` → `{"ok":true,"notify_backlog":0}`; **503** means the DB is down or a citizen update has waited 10+ minutes without n8n even trying (`core-11-notify-poll` not running: check `dc logs n8n`) |
+| Locked out after wrong passwords | wait 15 minutes (the limit is per person *and* client, so others are unaffected) |
+
+### Status updates to citizens on WhatsApp
+
+When a complaint is **assigned**, **started** or **closed** in the portal, the
+citizen gets one WhatsApp message for each (re-assigning or moving it to
+another department does not send a second "assigned"). The portal only queues
+the update (`grievance.notification_outbox`, written in the same transaction
+as the status change); n8n's `core-11-notify-poll` sends it within a minute
+through the normal send path and logs it like any other message. Each
+complaint page shows *WhatsApp updates to the citizen*: Queued / Sent /
+Retrying / Failed.
+
+**Before go-live: the `complaint_update` template must be approved by Meta.**
+These updates usually go out days after the citizen last wrote, outside
+WhatsApp's 24-hour window, so they are always sent as a template. Without an
+approved template every update fails (the page shows *Failed*, admins get one
+alert per batch). In WhatsApp Manager → Message templates → Create:
+
+- Category **Utility**, name `complaint_update` (or set `COMPLAINT_UPDATE_TEMPLATE`), languages **English (en)** and **Hindi (hi)**, same name for both. No header, footer or buttons.
+- ⚠️ **Language: plain "English" (code `en`), not "English (US)" / "English (UK)".**
+  The bot sends `en`; Meta treats `en_US` as a different translation. Such a
+  template is approved normally, and then every English update fails with error
+  132001 (template does not exist in the translation). Hindi is `hi`. The same
+  applies to the `admin_alert` template, which is also sent as `en`.
+- ⚠️ **Variable type: Number (`{{1}}`), not Name (`{{complaint_id}}`).** The
+  bot sends the three values by position. A template with named variables is
+  approved normally, and then every send fails with a parameter mismatch
+  (error 132000). Don't reorder or remove variables either: the bot always
+  sends complaint number, status, note.
+- Add Hindi to the same template (open it → *Add language*), with the same
+  variable type. Each language is approved on its own: go live only when
+  **both** show *Active*.
+- Body, English:
+  ```
+  Update on your complaint {{1}}.
+  Status: {{2}}
+  Note: {{3}}
+  To see the details, send this complaint number to us on WhatsApp.
+  ```
+- Body, Hindi:
+  ```
+  आपकी शिकायत {{1}} पर अपडेट।
+  स्थिति: {{2}}
+  टिप्पणी: {{3}}
+  विवरण देखने के लिए यह शिकायत संख्या हमें WhatsApp पर भेजें।
+  ```
+- Samples for review: `SCB-2026-C00012`, `Resolved and closed` / `हल होकर बंद`, `Replaced the handpump washer`.
+
+The note ({{3}}) is a fixed line for "assigned" and "started", and the closing
+officer's remark for "closed". Assignment remarks and staff names are never
+sent. A remark that contains anything that looks like a phone number is replaced
+by "The issue has been resolved." so an unverified number never reaches a citizen.
+
+| Task | How |
+|---|---|
+| Updates not going out | complaint page shows *Failed* with the error. 132001: template not approved yet, renamed, or created as "English (US)" instead of "English"; 132000 / 132012: created with Name variables, or the variables changed |
+| Check after approval | file a complaint from a real phone on staging, then assign, start and close it in the portal: the phone gets 3 updates within a minute each and the page shows *Sent* ×3. Repeat once typing in Hindi to test the `hi` version |
+| Undelivered updates | `... -c "select complaint_id, template_key, attempts, last_error from grievance.notification_outbox where status = 'failed' order by id desc limit 50"` |
+| Send failed ones again (after fixing the cause) | `... -c "update grievance.notification_outbox set status = 'pending', attempts = 0, next_attempt_at = now() where status = 'failed'"` |
+| Retry policy | 5 attempts (after 2, 4, 8, 16 minutes), then *Failed* and one admin alert; a citizen with no number on record (purged after 180 days of silence) fails at once |
+
 ## Monitoring
 - **UptimeRobot, HTTP monitor:** `https://PUBLIC_HOST/webhook/health` every 5 min.
   Down means citizens get no answers.
 - **UptimeRobot, keyword monitor:** the same URL, alerting when `"status":"ok"`
   is missing. This means the Mela sheet hasn't synced for over an hour, so the
   bot is answering from stale data.
+- **UptimeRobot, HTTP monitor:** `https://PUBLIC_HOST/portal/healthz` every 5 min.
+  Down means staff can't work complaints, or citizens' status updates are stuck.
 - **Direct check:** `curl -s https://PUBLIC_HOST/webhook/health` shows the
   status, issues, enabled services, the last inbound message and errors in
   the last 15 minutes.

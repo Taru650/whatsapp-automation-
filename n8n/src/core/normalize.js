@@ -12,11 +12,22 @@ function guessLang(text) {
 
 function normalizeMessage(message) {
   const m = message || {};
-  const base = { kind: 'unsupported', id: null, text: null, lat: null, lon: null, lang_guess: null, raw_type: m.type || null };
+  // media_id is deliberately NOT `id`: route.js treats any non-null input.id as
+  // a button/list interactive id (prefix-matched against a service); a raw
+  // WhatsApp media id would wrongly fall into its "stale id -> menu" branch.
+  const base = { kind: 'unsupported', id: null, media_id: null, mime: null, text: null, lat: null, lon: null, lang_guess: null, raw_type: m.type || null };
   switch (m.type) {
     case 'text': {
       const text = ((m.text || {}).body || '').trim();
       return { ...base, kind: 'text', text, lang_guess: guessLang(text) };
+    }
+    case 'image': {
+      const i = m.image || {};
+      return { ...base, kind: 'image', media_id: i.id || null, mime: i.mime_type || null, text: i.caption || null };
+    }
+    case 'document': {
+      const d = m.document || {};
+      return { ...base, kind: 'document', media_id: d.id || null, mime: d.mime_type || null, text: d.caption || null };
     }
     case 'interactive': {
       const i = m.interactive || {};

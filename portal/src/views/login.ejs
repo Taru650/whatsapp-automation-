@@ -1,0 +1,21 @@
+<%- include('partials/head') %>
+<div class="row justify-content-center">
+  <div class="col-sm-8 col-md-5 col-lg-4">
+    <h1 class="h4 mt-4 mb-3">Saran Complaints — staff sign in</h1>
+    <% if (error) { %><div class="alert alert-danger" role="alert"><%= error %></div><% } %>
+    <form method="post" action="<%= base %>/login">
+      <input type="hidden" name="_csrf" value="<%= csrf %>">
+      <div class="mb-3">
+        <label class="form-label" for="username">Username</label>
+        <input class="form-control" id="username" name="username" value="<%= username %>" autocomplete="username" autocapitalize="none" required autofocus>
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="password">Password</label>
+        <input class="form-control" id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn btn-primary w-100">Sign in</button>
+    </form>
+    <p class="text-muted small mt-3">Forgot your password? Ask your department head or the district admin to reset it.</p>
+  </div>
+</div>
+<%- include('partials/foot') %>

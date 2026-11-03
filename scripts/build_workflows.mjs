@@ -20,12 +20,14 @@ const targets = {
   'core/core-04-health.json': core.health,
   'core/core-08-error.json': core.error,
   'core/core-09-purge.json': ops.purge,
+  'core/core-11-notify-poll.json': ops.notifyPoll,
   'core/core-85-daily-report.json': ops.dailyReport,
   'core/core-99-test-harness.json': core.harness,
   'services/svc-echo.json': services.echo,
   'services/svc-template.json': services.template,
   'services/svc-mela.json': services.mela,
   'services/sync-mela.json': services.syncMela,
+  'services/svc-complaint.json': services.complaint,
 };
 
 // Compile every Code node the way n8n runs it (the body of an async function).

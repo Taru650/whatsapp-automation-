@@ -32,6 +32,19 @@ SQL
   echo "metabase_ro login ready"
 fi
 
+# Read-write login for the admin portal (sees only the grievance schema;
+# sql/30_grievance.sql). Same split as metabase_ro above.
+if [[ -n "${PORTAL_DB_PASSWORD:-}" ]]; then
+  cat <<'SQL' | PGOPTIONS="-c client_min_messages=warning" psql ${DATABASE_URL:+"$DATABASE_URL"} -X -q -v ON_ERROR_STOP=1 -o /dev/null -v pw="$PORTAL_DB_PASSWORD"
+select format(case when exists (select 1 from pg_roles where rolname = 'portal_rw')
+                   then 'alter role portal_rw login password %L'
+                   else 'create role portal_rw login password %L' end, :'pw') \gexec
+grant grievance_app to portal_rw;
+alter role portal_rw set search_path = grievance;
+SQL
+  echo "portal_rw login ready"
+fi
+
 # Approved general-information text for Mela Q&A answers.
 if [[ -f data/history.md ]]; then
   echo "insert into svc_mela.qa_context (id, content) values (1, :'content')

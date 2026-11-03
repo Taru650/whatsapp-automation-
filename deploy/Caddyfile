@@ -1,4 +1,16 @@
-# Only Meta's webhook and the health checks are exposed; the n8n editor and API are not.
+{
+	servers {
+		# Who may vouch for the real client: cloudflared, on the Docker network (office
+		# machine). Its X-Forwarded-Proto (https) and CF-Connecting-IP are believed.
+		# On the VPS clients connect straight from public IPs, which are never trusted,
+		# so Caddy uses the real address and its own TLS. Only Cloudflare's single
+		# CF-Connecting-IP is read: the leftmost X-Forwarded-For is client-controlled.
+		trusted_proxies static private_ranges
+		client_ip_headers CF-Connecting-IP
+	}
+}
+
+# Only Meta's webhook, the health checks and the staff portal are exposed; the n8n editor and API are not.
 {$SITE_ADDRESS} {
 	# exact paths only: nothing else under /webhook/ (e.g. the test harness) is reachable
 	@allowed path /webhook/wa /webhook/health /healthz
@@ -9,6 +21,21 @@
 		}
 		reverse_proxy n8n:5678
 	}
+
+	# Staff complaint portal (portal/, its own login). "/portal" and "/portal/..."
+	# only - not "/portalx". Up to 5 closure photos of 10 MB each per request.
+	@portal path /portal /portal/*
+	handle @portal {
+		request_body {
+			max_size 55MB
+		}
+		reverse_proxy portal:3001 {
+			# exactly one value, the resolved client: the portal trusts one proxy
+			# (PORTAL_TRUST_PROXY=1) and rate-limits sign-in per client IP
+			header_up X-Forwarded-For {client_ip}
+		}
+	}
+
 	handle {
 		respond "Not found" 404
 	}

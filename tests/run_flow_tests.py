@@ -88,6 +88,17 @@ def m_audio(wa_id):
     return {"from": wa_id, "id": next_id(), "timestamp": "1", "type": "audio", "audio": {"id": "media1", "mime_type": "audio/ogg"}}
 
 
+def m_image(wa_id, media_id="MEDIA_IMAGE_1", mime="image/jpeg", caption=None):
+    img = {"id": media_id, "mime_type": mime}
+    if caption is not None:
+        img["caption"] = caption
+    return {"from": wa_id, "id": next_id(), "timestamp": "1", "type": "image", "image": img}
+
+
+def m_document(wa_id, media_id="MEDIA_PDF_1", mime="application/pdf"):
+    return {"from": wa_id, "id": next_id(), "timestamp": "1", "type": "document", "document": {"id": media_id, "mime_type": mime}}
+
+
 def post(payload, signature=None):
     raw = json.dumps(payload).encode()
     sig = signature or "sha256=" + hmac.new(APP_SECRET.encode(), raw, hashlib.sha256).hexdigest()
@@ -156,7 +167,9 @@ def hash_of(wa_id):
 
 def reset_state():
     sql("truncate core.message_log, core.feedback, core.unanswered, core.sessions, core.citizens, core.sync_runs")
-    sql("delete from core.services where service_key not in ('echo', 'mela')")
+    sql("delete from core.services where service_key not in ('echo', 'mela', 'complaint')")
+    sql("truncate grievance.notification_outbox, grievance.complaint_status_history, grievance.complaint_evidence, grievance.complaints")
+    sql("update grievance.settings set value = 'false' where key = 'geofence_enabled'")
     enable_only("echo")
     sql("update core.settings set value = 'true' where key = 'llm_enabled'")
     reset_mocks()
@@ -173,7 +186,7 @@ TESTS = []
 
 def enable_only(*keys):
     names = ",".join(f"'{k}'" for k in keys)
-    sql(f"update core.services set enabled = (service_key in ({names})) where service_key in ('echo', 'mela')")
+    sql(f"update core.services set enabled = (service_key in ({names})) where service_key in ('echo', 'mela', 'complaint')")
 
 
 def scenario(fn=None, services=("echo",)):
@@ -276,10 +289,18 @@ def status_callback_does_nothing():
     payload = envelope([], u)
     del payload["entry"][0]["changes"][0]["value"]["messages"]
     payload["entry"][0]["changes"][0]["value"]["statuses"] = [{"id": "wamid.x", "status": "read", "recipient_id": u}]
-    before = scalar("select count(*) from core.message_log")
+    h = hash_of(u)
+    started = scalar("select now()")
     assert post(payload)[0] == 200
     wait_quiet()
-    assert out_to(u) == [] and scalar("select count(*) from core.message_log") == before
+    assert out_to(u) == [], [summary(c) for c in out_to(u)]
+    # Scoped to what this callback could write: a whole-table row count also counted
+    # other scenarios' late log writes and the every-minute notification poll, and
+    # failed intermittently in CI for reasons unrelated to status callbacks.
+    logged = scalar(f"select count(*) from core.message_log where ts >= '{started}' "
+                    f"and (wa_hash in ('{h}', 'unknown') or wa_msg_id = 'wamid.x')")
+    assert logged == "0", f"a status callback was logged: {logged} row(s)"
+    assert scalar(f"select count(*) from core.citizens where wa_hash = '{h}'") == "0", "a status callback created a citizen"
 
 
 @scenario
@@ -754,6 +775,310 @@ def nightly_purge_runs_and_reports():
     r = run_workflow("CorePurge0000001")
     assert r["ok"] and r["purged"]["retention_days"] == 180 and r["purged"]["message_log"] >= 1, r
     assert scalar("select count(*) from core.message_log where wa_msg_id = 'wamid.OLD1'") == "0"
+
+
+# ---------------------------------------------------------------- M4/M5: Complaints ---
+COMPLAINT_ONLY = ("complaint",)
+MELA_AND_COMPLAINT = ("mela", "complaint")
+
+
+def set_geofence(enabled, lat=None, lon=None, radius_m=None):
+    sql(f"update grievance.settings set value = '{'true' if enabled else 'false'}' where key = 'geofence_enabled'")
+    if lat is not None:
+        sql(f"update grievance.settings set value = '{lat}' where key = 'geofence_center_lat'")
+    if lon is not None:
+        sql(f"update grievance.settings set value = '{lon}' where key = 'geofence_center_lon'")
+    if radius_m is not None:
+        sql(f"update grievance.settings set value = '{radius_m}' where key = 'geofence_radius_m'")
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_registration_happy_path():
+    u = user()
+    send(u, m_button(u, "cmp:open"))
+    out = wait_out(u, 2)
+    assert ids_of(out[1]) == ["cmp:new", "cmp:mine", "core:menu"], summary(out[1])
+
+    send(u, m_button(u, "cmp:new", "New complaint"))
+    out = wait_out(u, 3)
+    assert out[2]["payload"]["interactive"]["type"] == "list", summary(out[2])
+
+    send(u, m_list(u, "cmp:cat:water_supply", "Water supply"))
+    out = wait_out(u, 4)
+    # lang is still the 'hi' default here (no text message yet to guess 'en' from -
+    # see complaint_keyword_takes_over_from_mela_without_editing_mela for that switch)
+    assert scalar(f"select state from core.sessions where wa_hash = '{hash_of(u)}'") == "cmp.describe", summary(out[3])
+
+    send(u, m_text(u, "No water since yesterday morning"))
+    out = wait_out(u, 5)
+    assert "photo" in body_of(out[4]).lower(), summary(out[4])
+
+    send(u, m_image(u))
+    out = wait_out(u, 6)
+    assert ids_of(out[5]) == ["cmp:evidence:done"], summary(out[5])
+
+    send(u, m_button(u, "cmp:evidence:done", "Done"))
+    out = wait_out(u, 7)
+    assert out[6]["payload"]["interactive"]["type"] == "location_request_message", summary(out[6])
+
+    send(u, m_location(u, 25.6912, 85.1720))
+    out = wait_out(u, 8)
+    assert "Submit" in str(out[7]["payload"]), summary(out[7])
+    assert "No water" in body_of(out[7]), body_of(out[7])
+
+    send(u, m_button(u, "cmp:confirm", "Submit"))
+    out = wait_out(u, 10)  # the registered-receipt message + the feedback prompt (done=true)
+    receipt = body_of(out[8])
+    assert "SCB-" in receipt, receipt
+
+    h = hash_of(u)
+    row = sql(f"select category_key, department_id, status, lat, lon from grievance.complaints where citizen_wa_hash = '{h}'")
+    assert len(row) == 1, row
+    assert row[0][0] == "water_supply" and row[0][2] == "open" and row[0][3] == "25.6912" and row[0][4] == "85.172", row
+    assert int(scalar(f"select count(*) from grievance.complaint_evidence where complaint_id = "
+                       f"(select complaint_id from grievance.complaints where citizen_wa_hash = '{h}')")) == 1
+    # byte-exact: the photo on disk is exactly what WhatsApp served (a text-decoded
+    # download once turned every byte >= 0x80 into U+FFFD and silently corrupted it)
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "mocks"))
+    from graph_api import MEDIA_FIXTURES  # noqa: E402
+    served = MEDIA_FIXTURES["MEDIA_IMAGE_1"]["bytes"]
+    sha, rel = sql(f"select sha256, file_path from grievance.complaint_evidence where complaint_id = "
+                   f"(select complaint_id from grievance.complaints where citizen_wa_hash = '{h}')")[0]
+    assert sha == hashlib.sha256(served).hexdigest(), "stored photo differs from the bytes WhatsApp served"
+    media_root = os.environ.get("COMPLAINT_MEDIA_PATH", os.path.join(os.getcwd(), ".dev", "complaint-media"))
+    with open(os.path.join(media_root, rel), "rb") as f:
+        assert f.read() == served, "file on disk differs from the bytes WhatsApp served"
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_requires_at_least_one_photo_before_location():
+    u = user()
+    send(u, m_button(u, "cmp:open"))
+    wait_out(u, 2)
+    send(u, m_button(u, "cmp:new"))
+    wait_out(u, 3)
+    send(u, m_list(u, "cmp:cat:electricity", "Electricity"))
+    wait_out(u, 4)
+    send(u, m_text(u, "No power in the whole block"))
+    wait_out(u, 5)
+    send(u, m_text(u, "done"))  # no photo added yet
+    out = wait_out(u, 6)
+    assert "at least one photo" in body_of(out[5]), body_of(out[5])
+    h = hash_of(u)
+    assert scalar(f"select state from core.sessions where wa_hash = '{h}'") == "cmp.evidence", "still waiting for a photo"
+    assert scalar(f"select count(*) from grievance.complaints where citizen_wa_hash = '{h}'") == "0"
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_geofence_rejects_outside_then_accepts_inside():
+    set_geofence(True, lat=25.6920, lon=85.1750, radius_m=200)
+    u = user()
+    send(u, m_button(u, "cmp:open"))
+    wait_out(u, 2)
+    send(u, m_button(u, "cmp:new"))
+    wait_out(u, 3)
+    send(u, m_list(u, "cmp:cat:other", "Other"))
+    wait_out(u, 4)
+    send(u, m_text(u, "General issue near the gate"))
+    wait_out(u, 5)
+    send(u, m_image(u))
+    wait_out(u, 6)
+    send(u, m_button(u, "cmp:evidence:done"))
+    wait_out(u, 7)
+
+    send(u, m_location(u, 26.0, 86.0))  # far outside the 200m radius
+    out = wait_out(u, 8)
+    assert "inside the Mela ground" in body_of(out[7]), body_of(out[7])
+    h = hash_of(u)
+    assert scalar(f"select state from core.sessions where wa_hash = '{h}'") == "cmp.location"
+
+    send(u, m_location(u, 25.6921, 85.1751))  # a few metres away: inside
+    out = wait_out(u, 9)
+    assert "Submit" in str(out[8]["payload"]), summary(out[8])
+    set_geofence(False)
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_status_check_is_restricted_to_the_citizens_own_number():
+    u = user()
+    send(u, m_button(u, "cmp:open"))
+    wait_out(u, 2)
+    send(u, m_button(u, "cmp:new"))
+    wait_out(u, 3)
+    send(u, m_list(u, "cmp:cat:sanitation", "Sanitation"))
+    wait_out(u, 4)
+    send(u, m_text(u, "Garbage not collected"))
+    wait_out(u, 5)
+    send(u, m_image(u))
+    wait_out(u, 6)
+    send(u, m_button(u, "cmp:evidence:done"))
+    wait_out(u, 7)
+    send(u, m_location(u, 25.6912, 85.1720))
+    wait_out(u, 8)
+    send(u, m_button(u, "cmp:confirm"))
+    wait_out(u, 10)
+    h = hash_of(u)
+    cid = scalar(f"select complaint_id from grievance.complaints where citizen_wa_hash = '{h}'")
+
+    # done=true here too, but feedback was already asked once this session
+    # (right after cmp:confirm) - finalizeTurn only ever asks once per session.
+    send(u, m_text(u, cid))
+    out = wait_out(u, 11)
+    assert "Open" in body_of(out[10]), body_of(out[10])
+
+    other = user()
+    send(other, m_text(other, cid))
+    out = wait_out(other, 3)  # welcome + miss message + first feedback ask of this (fresh) session
+    assert "couldn't find" in body_of(out[1]), "a citizen must never look up another citizen's complaint by id"
+
+
+@scenario(services=MELA_AND_COMPLAINT)
+def complaint_keyword_takes_over_from_mela_without_editing_mela():
+    u = user()
+    send(u, m_text(u, "shikayat"))
+    out = wait_out(u, 2)
+    assert ids_of(out[1]) == ["cmp:new", "cmp:mine", "core:menu"], \
+        "the keyword correction in sql/31_svc_complaint.sql must route this to svc_complaint, not mela's control room"
+    # mela keeps its own control-room keywords (helpline/emergency), untouched
+    v = user()
+    send(v, m_text(v, "helpline"))
+    out = wait_out(v, 2)
+    assert "control" in body_of(out[1]).lower() or "कंट्रोल" in body_of(out[1]), summary(out[1])
+
+
+# ---------------------------------------------------------------- M8: status notifications ---
+NOTIFY_WF = "CoreNotify000001"
+
+
+def register_complaint(u, category="cmp:cat:water_supply", text="Handpump broken near gate 3"):
+    """File one complaint over WhatsApp; returns its id (citizen lang becomes 'en' from the typed text)."""
+    for msg, n in ((m_button(u, "cmp:open"), 2), (m_button(u, "cmp:new"), 3), (m_list(u, category), 4),
+                   (m_text(u, text), 5), (m_image(u), 6), (m_button(u, "cmp:evidence:done"), 7),
+                   (m_location(u, 25.6912, 85.1720), 8), (m_button(u, "cmp:confirm"), 10)):
+        send(u, msg)
+        wait_out(u, n)
+    return scalar(f"select complaint_id from grievance.complaints where citizen_wa_hash = '{hash_of(u)}'")
+
+
+def test_officer(cid):
+    """A field officer of the complaint's department (as the portal would create)."""
+    name = f"flow.officer.{SEQ[0]}"
+    return scalar(f"insert into grievance.portal_users (username, password_hash, full_name, role, department_id) "
+                  f"select '{name}', 'x', 'Flow Officer', 'field_officer', department_id "
+                  f"from grievance.complaints where complaint_id = '{cid}' returning user_id")
+
+
+# The same statements, in the same order and transaction shape, as the portal's
+# assign / start / close routes (portal/src/routes/complaints.js, closure.js).
+def portal_assign(cid, officer):
+    sql(f"begin; update grievance.complaints set assigned_officer_user_id = {officer}, status = 'assigned' where complaint_id = '{cid}'; "
+        f"insert into grievance.complaint_status_history (complaint_id, from_status, to_status, changed_by_user_id, remark) "
+        f"values ('{cid}', 'open', 'assigned', {officer}, 'Assigned to Flow Officer'); commit;")
+
+
+def portal_start(cid, officer):
+    sql(f"begin; update grievance.complaints set status = 'in_progress' where complaint_id = '{cid}'; "
+        f"insert into grievance.complaint_status_history (complaint_id, from_status, to_status, changed_by_user_id, remark) "
+        f"values ('{cid}', 'assigned', 'in_progress', {officer}, 'Work started'); commit;")
+
+
+def portal_close(cid, officer, remark):
+    sql(f"begin; insert into grievance.complaint_status_history (complaint_id, from_status, to_status, changed_by_user_id, remark) "
+        f"values ('{cid}', 'in_progress', 'closed', {officer}, '{remark}'); "
+        f"insert into grievance.complaint_evidence (complaint_id, uploaded_by, uploaded_by_user_id, file_path, mime_type, kind, sha256) "
+        f"values ('{cid}', 'officer', {officer}, 'officer/{cid}/proof.jpg', 'image/jpeg', 'photo', '{'0' * 64}'); "
+        f"update grievance.complaints set status = 'closed', closed_at = now() where complaint_id = '{cid}'; commit;")
+
+
+def poll_until_sent(cid, template_key, timeout=20):
+    """Run core-11-notify-poll now (the every-minute schedule may also pick the row up first)."""
+    run_workflow(NOTIFY_WF)
+    end = time.time() + timeout
+    while time.time() < end:
+        st = scalar(f"select status from grievance.notification_outbox where complaint_id = '{cid}' and template_key = '{template_key}'")
+        if st in ("sent", "failed"):
+            return st
+        time.sleep(0.5)
+    raise AssertionError(f"{template_key} for {cid} still {st}")
+
+
+def template_params(c):
+    return [p["text"] for p in c["payload"]["template"]["components"][0]["parameters"]]
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_status_changes_reach_the_citizen_as_whatsapp_templates():
+    u = user()
+    cid = register_complaint(u)
+    assert scalar(f"select count(*) from grievance.notification_outbox where complaint_id = '{cid}'") == "0", \
+        "filing a complaint is confirmed in the chat itself, not through the outbox"
+    officer = test_officer(cid)
+    n0 = len(out_to(u))
+
+    portal_assign(cid, officer)
+    assert poll_until_sent(cid, "status_assigned") == "sent"
+    out = wait_out(u, n0 + 1)
+    tpl = out[-1]["payload"]
+    assert tpl["type"] == "template" and tpl["template"]["name"] == "complaint_update", summary(out[-1])
+    assert tpl["template"]["language"]["code"] == "en", "the citizen wrote in English"
+    assert template_params(out[-1]) == [cid, "Assigned to an officer", "An officer will look into it."], template_params(out[-1])
+    assert "Flow Officer" not in json.dumps(tpl), "staff names stay internal"
+
+    portal_start(cid, officer)
+    assert poll_until_sent(cid, "status_in_progress") == "sent"
+    out = wait_out(u, n0 + 2)
+    assert template_params(out[-1])[1] == "In progress", template_params(out[-1])
+
+    portal_close(cid, officer, "Replaced the pump washer; water flowing again")
+    assert poll_until_sent(cid, "status_closed") == "sent"
+    out = wait_out(u, n0 + 3)
+    assert template_params(out[-1]) == [cid, "Resolved and closed", "Replaced the pump washer; water flowing again"], template_params(out[-1])
+    assert len(out) == n0 + 3, [summary(c) for c in out[n0:]]
+
+    # logged like every other outbound message, with the WhatsApp message id
+    h = hash_of(u)
+    sent = sql(f"select out_id from grievance.notification_outbox where complaint_id = '{cid}' order by id")
+    assert len(sent) == 3 and all(r[0].startswith("wamid.mock.") for r in sent), sent
+    logged = scalar(f"select count(*) from core.message_log where wa_hash = '{h}' and direction = 'out' "
+                    f"and service_key = 'complaint' and wa_msg_id in (select out_id from grievance.notification_outbox where complaint_id = '{cid}')")
+    assert logged == "3", logged
+
+    # nothing is sent twice: a later poll finds nothing due
+    r = run_workflow(NOTIFY_WF)
+    assert r["claimed"] == 0, r
+    wait_quiet(2)
+    assert len(out_to(u)) == n0 + 3
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_update_that_cannot_be_delivered_is_retried_then_alerted():
+    u = user()
+    cid = register_complaint(u)
+    officer = test_officer(cid)
+    http("POST", f"{GRAPH}/__fail_to", {"to": u})
+    a0 = len(out_to(ADMIN))
+
+    portal_assign(cid, officer)
+    run_workflow(NOTIFY_WF)
+    end = time.time() + 20
+    while time.time() < end:
+        row = sql(f"select status, attempts, last_error, next_attempt_at > now() from grievance.notification_outbox where complaint_id = '{cid}'")[0]
+        if row[1] != "0" and row[0] != "sending":
+            break
+        time.sleep(0.5)
+    assert row[0] == "pending" and row[1] == "1" and "131026" in row[2] and row[3] == "t", \
+        f"first failure is retried later, not dropped: {row}"
+    assert len(out_to(ADMIN)) == a0, "no alert for a failure that will be retried"
+
+    # the 5th failed attempt is final, and the admins hear about it once
+    sql(f"update grievance.notification_outbox set attempts = 4, next_attempt_at = now() where complaint_id = '{cid}'")
+    assert poll_until_sent(cid, "status_assigned") == "failed"
+    out = wait_out(ADMIN, a0 + 1)
+    alert = out[-1]["payload"]
+    assert alert["template"]["name"] == "admin_alert", summary(out[-1])
+    text = alert["template"]["components"][0]["parameters"][0]["text"]
+    assert cid in text and "NOT delivered" in text, text
+    assert scalar(f"select attempts from grievance.notification_outbox where complaint_id = '{cid}'") == "5"
 
 
 # ---------------------------------------------------------------- runner ---

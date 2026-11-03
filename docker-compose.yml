@@ -30,7 +30,9 @@ x-n8n-env: &n8n-env
   TZ: Asia/Kolkata
   # workflows read their configuration from $env
   N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
-  NODE_FUNCTION_ALLOW_BUILTIN: crypto
+  # fs/path: svc-complaint's media-download step writes evidence files to
+  # COMPLAINT_MEDIA_PATH (no existing Code node used fs before this).
+  NODE_FUNCTION_ALLOW_BUILTIN: crypto,fs,path
   # our message_log is the audit trail; don't keep successful executions
   EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
   EXECUTIONS_DATA_SAVE_ON_ERROR: all
@@ -56,7 +58,8 @@ x-n8n-env: &n8n-env
   WA_API_BASE: ${WA_API_BASE:-https://graph.facebook.com}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
-  LLM_ENABLED: ${LLM_ENABLED:-true}
+  # off at launch (decision 3 Nov 2026): keywords and menus only; set true + ANTHROPIC_API_KEY to enable
+  LLM_ENABLED: ${LLM_ENABLED:-false}
   LLM_MODEL: ${LLM_MODEL:-claude-haiku-4-5}
   PHONE_HASH_SECRET: ${PHONE_HASH_SECRET:?set PHONE_HASH_SECRET}
   # daily report e-mail (optional; WhatsApp admin_alert is always sent)
@@ -66,9 +69,15 @@ x-n8n-env: &n8n-env
   PGCRYPTO_KEY: ${PGCRYPTO_KEY:?set PGCRYPTO_KEY}
   ADMIN_WA_NUMBERS: ${ADMIN_WA_NUMBERS:-}
   ADMIN_ALERT_TEMPLATE: ${ADMIN_ALERT_TEMPLATE:-admin_alert}
+  # complaint status updates to citizens (core-11-notify-poll); approved utility
+  # template, hi + en, three body variables (docs/runbook.md)
+  COMPLAINT_UPDATE_TEMPLATE: ${COMPLAINT_UPDATE_TEMPLATE:-complaint_update}
   # Sonpur Mela data (Google Sheet read by the sync-mela workflow)
   MELA_SHEET_ID: ${MELA_SHEET_ID:-}
   GOOGLE_SA_JSON: ${GOOGLE_SA_JSON:-}
+  # Complaint evidence (citizen photos/PDFs via svc-complaint; officer closure
+  # evidence via the portal) - shared Docker volume, not cloud object storage.
+  COMPLAINT_MEDIA_PATH: /data/complaint-media
 
 services:
   postgres:
@@ -98,6 +107,7 @@ services:
     environment: *n8n-env
     volumes:
       - n8n_data:/home/node/.n8n
+      - complaint_media:/data/complaint-media
     ports:
       - "127.0.0.1:${N8N_HOST_PORT:-5678}:5678"
 
@@ -120,6 +130,8 @@ services:
       redis:
         condition: service_started
     environment: *n8n-env
+    volumes:
+      - complaint_media:/data/complaint-media
 
   # Path filter in front of n8n: only the webhook + health endpoints are forwarded.
   caddy:
@@ -158,6 +170,35 @@ services:
       JAVA_OPTS: -Xmx1g
     ports:
       - "127.0.0.1:${METABASE_HOST_PORT:-3000}:3000"
+
+  # Complaint portal for staff (portal/). Public at https://PUBLIC_HOST/portal/ through
+  # Caddy (deploy/Caddyfile); the port itself is bound to 127.0.0.1 like n8n and
+  # Metabase. Own profile, so stacks that don't run it need none of its settings
+  # (Caddy then answers 502 on /portal and everything else is unaffected).
+  #   docker compose --profile portal up -d portal
+  #   docker compose run --rm portal node scripts/create_user.mjs --role district_admin --username <u> --name "<name>"
+  portal:
+    build: ./portal
+    profiles: ["portal"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ENV: ${ENV:-prod}
+      PORTAL_DB_HOST: postgres
+      PORTAL_DB_NAME: citizen_bot
+      PORTAL_DB_USER: portal_rw
+      PORTAL_DB_PASSWORD: ${PORTAL_DB_PASSWORD:-}
+      PORTAL_SESSION_SECRET: ${PORTAL_SESSION_SECRET:-}   # the app refuses to start without a real one
+      PORTAL_BCRYPT_ROUNDS: ${PORTAL_BCRYPT_ROUNDS:-12}
+      PORTAL_TRUST_PROXY: ${PORTAL_TRUST_PROXY:-1}   # Caddy, the one proxy in front
+      COMPLAINT_MEDIA_PATH: /data/complaint-media
+      TZ: Asia/Kolkata
+    volumes:
+      - complaint_media:/data/complaint-media
+    ports:
+      - "127.0.0.1:${PORTAL_HOST_PORT:-3001}:3001"
 
   # Office machine: outbound-only Cloudflare Tunnel -> caddy (no inbound ports, no static IP).
   cloudflared:
@@ -199,6 +240,7 @@ services:
       ADMIN_WA_NUMBERS: ${ADMIN_WA_NUMBERS:-}
       PHONE_HASH_SECRET: ${PHONE_HASH_SECRET}
       METABASE_DB_PASSWORD: ${METABASE_DB_PASSWORD:-}
+      PORTAL_DB_PASSWORD: ${PORTAL_DB_PASSWORD:-}   # creates/updates the portal_rw login
     entrypoint: ["bash", "scripts/db_migrate.sh"]
 
   metabase-setup:
@@ -239,3 +281,4 @@ volumes:
   postgres_data:
   n8n_data:
   caddy_data:
+  complaint_media:

@@ -33,6 +33,14 @@ if [[ -f .env ]]; then
   echo "ok  $DIR/env-$STAMP.enc"
 fi
 
+# Complaint evidence (citizen/officer photos & PDFs): a Docker volume, not a
+# database, so it rides alongside the dumps as its own encrypted tar.
+if docker compose exec -T n8n test -d /data/complaint-media >/dev/null 2>&1; then
+  media_out="$DIR/complaint-media-$STAMP.tar.enc"
+  docker compose exec -T n8n tar -C /data/complaint-media -cf - . | enc "$media_out"
+  echo "ok  $media_out ($(du -h "$media_out" | cut -f1))"
+fi
+
 find "$DIR" -name '*.enc' -mtime +"$KEEP" -delete
 if [[ -n "${BACKUP_REMOTE:-}" ]]; then
   rclone copy "$DIR" "$BACKUP_REMOTE" --max-age 25h

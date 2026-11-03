@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><%= title %> · Saran Complaints</title>
+<link rel="stylesheet" href="<%= base %>/static/bootstrap/css/bootstrap.min.css">
+<link rel="stylesheet" href="<%= base %>/static/app.css">
+</head>
+<body>
+<% if (locals.user) { %>
+<nav class="navbar navbar-expand-md navbar-dark bg-dark">
+  <div class="container-fluid">
+    <a class="navbar-brand" href="<%= base %>/">Saran Complaints</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav" aria-controls="nav" aria-expanded="false" aria-label="Menu">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="nav">
+      <ul class="navbar-nav me-auto">
+        <li class="nav-item"><a class="nav-link" href="<%= base %>/">Dashboard</a></li>
+        <li class="nav-item"><a class="nav-link" href="<%= base %>/complaints">Complaints</a></li>
+        <li class="nav-item"><a class="nav-link" href="<%= base %>/reports">Reports</a></li>
+        <% if (user.role !== 'field_officer') { %>
+        <li class="nav-item"><a class="nav-link" href="<%= base %>/users">Staff</a></li>
+        <% } %>
+        <% if (user.role === 'district_admin') { %>
+        <li class="nav-item"><a class="nav-link" href="<%= base %>/settings/geofence">Geofence</a></li>
+        <% } %>
+      </ul>
+      <span class="navbar-text small me-3">
+        <%= user.full_name %> · <%= ROLE_LABEL[user.role] %><%= user.department_en ? ' · ' + user.department_en : '' %>
+      </span>
+      <a class="btn btn-sm btn-outline-light me-2 my-1" href="<%= base %>/password">Password</a>
+      <form method="post" action="<%= base %>/logout" class="d-inline my-1">
+        <input type="hidden" name="_csrf" value="<%= locals.csrf %>">
+        <button class="btn btn-sm btn-outline-light">Sign out</button>
+      </form>
+    </div>
+  </div>
+</nav>
+<% } %>
+<main class="container py-3">
+<% if (locals.flash) { %>
+<div class="alert alert-<%= flash.type === 'success' ? 'success' : 'danger' %>" role="alert"><%= flash.text %></div>
+<% } %>

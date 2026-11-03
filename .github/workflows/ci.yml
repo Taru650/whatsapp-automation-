@@ -36,9 +36,16 @@ jobs:
       - name: Migrate DB (twice, to prove idempotency) + SQL tests + template checks
         run: |
           set -a; source tests/test.env; set +a
-          export METABASE_DB_PASSWORD=ci-metabase-ro
+          export METABASE_DB_PASSWORD=ci-metabase-ro PORTAL_DB_PASSWORD=ci-portal-rw
           scripts/db_migrate.sh && scripts/db_migrate.sh
           npm run test:sql
+
+      # Run as portal_rw, the portal's real least-privilege login, so the grants are tested too.
+      - name: Portal tests
+        working-directory: portal
+        env:
+          PORTAL_DB_PASSWORD: ci-portal-rw
+        run: npm ci && npm test
 
       - name: Backup -> restore drill
         run: tests/restore_drill.sh
@@ -57,9 +64,12 @@ jobs:
           set -a; source tests/test.env; set +a
           npm run test:flow
 
-      # Ingress: only webhook + health paths get through Caddy (the test harness is
-      # published in CI, so this proves it is unreachable from outside)
+      # Ingress: only webhook + health paths and /portal get through Caddy (the test
+      # harness is published in CI, so this proves it is unreachable from outside);
+      # the portal runs with production settings behind it (Secure cookie, client IP)
       - name: Caddy path filter probe
+        env:
+          PORTAL_DB_PASSWORD: ci-portal-rw
         run: |
           curl -sSfL https://github.com/caddyserver/caddy/releases/download/v2.10.0/caddy_2.10.0_linux_amd64.tar.gz | tar -xz caddy
           CADDY=./caddy tests/caddy_probe.sh

@@ -1,0 +1,146 @@
+<%- include('partials/head') %>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+  <h1 class="h4 mb-0"><%= c.complaint_id %></h1>
+  <div>
+    <span class="badge fs-6 <%= STATUS_BADGE[c.status] %>"><%= STATUS_LABEL[c.status] %></span>
+    <% if (c.overdue) { %><span class="badge fs-6 text-bg-danger">Overdue</span><% } %>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card mb-3"><div class="card-body">
+      <dl class="row mb-0">
+        <dt class="col-sm-4">Category</dt><dd class="col-sm-8"><%= c.category_en %> · <span lang="hi"><%= c.category_hi %></span></dd>
+        <dt class="col-sm-4">Department</dt><dd class="col-sm-8"><%= c.department_en %> · <span lang="hi"><%= c.department_hi %></span></dd>
+        <dt class="col-sm-4">Assigned to</dt><dd class="col-sm-8"><%= c.officer_name || 'Not assigned yet' %></dd>
+        <dt class="col-sm-4">Filed</dt><dd class="col-sm-8"><%= fmtTime(c.created_at) %></dd>
+        <dt class="col-sm-4">Due</dt><dd class="col-sm-8"><%= fmtTime(c.due_at) %></dd>
+        <dt class="col-sm-4">Description</dt><dd class="col-sm-8 text-break pre-wrap"><%= c.description %></dd>
+        <dt class="col-sm-4">Location</dt>
+        <dd class="col-sm-8">
+          <%= c.lat.toFixed(5) %>, <%= c.lon.toFixed(5) %><br>
+          <a class="btn btn-sm btn-outline-primary mt-1" rel="noopener" target="_blank"
+             href="https://www.google.com/maps/dir/?api=1&amp;destination=<%= c.lat %>,<%= c.lon %>">Directions to the spot</a>
+        </dd>
+      </dl>
+    </div></div>
+
+    <% if (closure) { %>
+    <div class="card mb-3 border-success">
+      <div class="card-body">
+        <h2 class="h6 text-success">Officer's proof</h2>
+        <p class="small text-muted mb-2">Closed by <%= closure.full_name || 'staff' %> on <%= fmtTime(closure.ts) %></p>
+        <p class="text-break pre-wrap"><%= closure.remark %></p>
+        <%- include('partials/evidence', { items: officerEvidence, who: 'officer' }) %>
+      </div>
+    </div>
+    <% } %>
+
+    <h2 class="h6">Citizen's evidence</h2>
+    <%- include('partials/evidence', { items: citizenEvidence, who: 'citizen' }) %>
+  </div>
+
+  <div class="col-lg-5">
+    <% if (can.close) { %>
+    <div class="card mb-3 border-success"><div class="card-body">
+      <h2 class="h6">Close with proof</h2>
+      <p class="small text-muted">Closing is final. Attach at least one photo of the completed work and say what was done.</p>
+      <% if (closeError) { %><div class="alert alert-danger py-2" role="alert"><%= closeError %></div><% } %>
+      <form method="post" action="<%= base %>/complaints/<%= c.complaint_id %>/close" enctype="multipart/form-data"
+            data-confirm="Close this complaint? This cannot be undone.">
+        <input type="hidden" name="_csrf" value="<%= csrf %>">
+        <label class="form-label small" for="photos">Photos (JPG/PNG, up to 5, max 10 MB each)</label>
+        <input class="form-control mb-2" id="photos" name="photos" type="file" accept="image/jpeg,image/png" multiple required>
+        <label class="form-label small" for="close-remark">What was done</label>
+        <textarea class="form-control mb-2" id="close-remark" name="remark" rows="3" minlength="5" maxlength="1000" required><%= closeRemark %></textarea>
+        <button class="btn btn-success">Close complaint</button>
+      </form>
+    </div></div>
+    <% } %>
+
+    <% if (can.assign) { %>
+    <div class="card mb-3"><div class="card-body">
+      <h2 class="h6"><%= c.assigned_officer_user_id ? 'Re-assign' : 'Assign' %> to a field officer</h2>
+      <% if (!officers.length) { %>
+        <p class="text-muted small mb-0">This department has no active field officers yet. <a href="<%= base %>/users/new">Create one</a>.</p>
+      <% } else { %>
+      <form method="post" action="<%= base %>/complaints/<%= c.complaint_id %>/assign">
+        <input type="hidden" name="_csrf" value="<%= csrf %>">
+        <select class="form-select mb-2" name="officer_id" required aria-label="Field officer">
+          <option value="">Choose an officer…</option>
+          <% for (const o of officers) { %>
+          <option value="<%= o.user_id %>" <%= o.user_id === c.assigned_officer_user_id ? 'selected' : '' %>><%= o.full_name %></option>
+          <% } %>
+        </select>
+        <input class="form-control mb-2" name="remark" maxlength="1000" placeholder="Note for the officer (optional)">
+        <button class="btn btn-primary">Assign</button>
+      </form>
+      <% } %>
+    </div></div>
+    <% } %>
+
+    <% if (can.start) { %>
+    <div class="card mb-3"><div class="card-body">
+      <h2 class="h6">Start work</h2>
+      <form method="post" action="<%= base %>/complaints/<%= c.complaint_id %>/start">
+        <input type="hidden" name="_csrf" value="<%= csrf %>">
+        <input class="form-control mb-2" name="remark" maxlength="1000" placeholder="Remark (optional)">
+        <button class="btn btn-primary">Mark in progress</button>
+      </form>
+    </div></div>
+    <% } %>
+
+    <% if (can.transfer) { %>
+    <div class="card mb-3"><div class="card-body">
+      <h2 class="h6">Wrong department?</h2>
+      <form method="post" action="<%= base %>/complaints/<%= c.complaint_id %>/transfer" data-confirm="Move this complaint? Its assignment will be cleared.">
+        <input type="hidden" name="_csrf" value="<%= csrf %>">
+        <select class="form-select mb-2" name="department_id" required aria-label="Department">
+          <option value="">Move to…</option>
+          <% for (const d of departments) { if (d.department_id === c.department_id) continue; %>
+          <option value="<%= d.department_id %>"><%= d.name_en %></option>
+          <% } %>
+        </select>
+        <input class="form-control mb-2" name="remark" maxlength="1000" placeholder="Reason (optional)">
+        <button class="btn btn-outline-danger">Move</button>
+      </form>
+    </div></div>
+    <% } %>
+
+    <h2 class="h6">History</h2>
+    <ol class="list-group list-group-numbered mb-3">
+      <% for (const h of history) { %>
+      <li class="list-group-item">
+        <div class="small text-muted"><%= fmtTime(h.ts) %> · <%= h.full_name || 'Citizen (WhatsApp)' %></div>
+        <div><%= h.from_status ? STATUS_LABEL[h.from_status] + ' → ' : '' %><strong><%= STATUS_LABEL[h.to_status] %></strong></div>
+        <% if (h.remark) { %><div class="small text-break"><%= h.remark %></div><% } %>
+      </li>
+      <% } %>
+    </ol>
+
+    <h2 class="h6">WhatsApp updates to the citizen</h2>
+    <% if (!notices.length) { %>
+    <p class="small text-muted">None yet. The citizen is sent an update when the complaint is assigned, started and closed.</p>
+    <% } else { %>
+    <ul class="list-group mb-3" id="notices">
+      <% for (const n of notices) { %>
+      <li class="list-group-item d-flex justify-content-between align-items-start gap-2">
+        <div>
+          <div><strong><%= STATUS_LABEL[n.status] || n.status %></strong></div>
+          <div class="small text-muted">
+            <% if (n.delivery === 'sent') { %>Delivered to WhatsApp <%= fmtTime(n.sent_at) %>
+            <% } else if (n.delivery === 'failed') { %>Not delivered after <%= n.attempts %> attempt<%= n.attempts === 1 ? '' : 's' %><%= n.last_error ? ': ' + n.last_error.slice(0, 120) : '' %>
+            <% } else if (n.attempts > 0 && n.delivery === 'pending') { %>Retrying (attempt <%= n.attempts %> failed), next try <%= fmtTime(n.next_attempt_at) %>
+            <% } else { %>Queued <%= fmtTime(n.created_at) %>, goes out within a minute<% } %>
+          </div>
+        </div>
+        <span class="badge <%= { sent: 'text-bg-success', failed: 'text-bg-danger' }[n.delivery] || 'text-bg-secondary' %>"><%= { sent: 'Sent', failed: 'Failed', sending: 'Sending', pending: n.attempts > 0 ? 'Retrying' : 'Queued' }[n.delivery] %></span>
+      </li>
+      <% } %>
+    </ul>
+    <% } %>
+  </div>
+</div>
+<p><a href="<%= base %>/complaints">← All complaints</a></p>
+<%- include('partials/foot') %>
