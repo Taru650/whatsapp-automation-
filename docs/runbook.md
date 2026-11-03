@@ -97,6 +97,7 @@ With no data, screens still work but say "no places/events found".
 | Task | Command |
 |---|---|
 | Deploy a new version | `git pull && dc run --rm migrate && dc stop n8n && dc run --rm import && dc up -d n8n` |
+| AI (LLM) | **Off at launch** (`LLM_ENABLED=false` in `.env`). On: set `LLM_ENABLED=true` and `ANTHROPIC_API_KEY`, then `dc up -d n8n` |
 | Turn the LLM off (no restart) | `dc exec postgres psql -U bot citizen_bot -c "update core.settings set value='false' where key='llm_enabled'"` |
 | Disable/enable a service | `... -c "update core.services set enabled=false where service_key='echo'"` (the menu changes on the next message) |
 | Rotate the WhatsApp token | edit `.env` → `dc up -d n8n` |

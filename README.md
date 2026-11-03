@@ -1,9 +1,15 @@
 # Saran Citizen WhatsApp Bot
 
 A WhatsApp citizen-services bot for Saran district, built on **n8n** with
-**Postgres**, and using **Claude Haiku 4.5** only to understand free text.
-Phase 1 serves **Sonpur Mela** information. The Officer Directory and Scheme
-Eligibility plug in later without rebuilding the bot.
+**Postgres**. One WhatsApp number serves **Sonpur Mela** information and
+**tracked complaints** (filed on WhatsApp, worked by staff in the `portal/`
+web app, with status updates back to the citizen). The Officer Directory and
+Scheme Eligibility plug in later without rebuilding the bot.
+
+**AI is off at launch** (`LLM_ENABLED=false`): menus and keywords answer
+everything. Switching it on (`LLM_ENABLED=true` + `ANTHROPIC_API_KEY`) lets
+**Claude Haiku 4.5** understand free text that matches no keyword; it never
+states facts.
 
 - Plan: [`docs/implementation-plan.md`](docs/implementation-plan.md)
   ([PDF](docs/Saran-Citizen-WhatsApp-Bot-Plan.pdf))
@@ -64,7 +70,7 @@ npm run check                      # generated JSON up to date + unit tests
 PGHOST=... PGUSER=... PGPASSWORD=... scripts/dev_up.sh   # migrate, mocks, import, start n8n
 set -a; source tests/test.env; set +a
 npm run test:sql                   # SQL asserts + template limits
-npm run test:flow                  # 36 end-to-end scenarios through the live n8n
+npm run test:flow                  # 43 end-to-end scenarios through the live n8n
 python3 tests/run_mela_routing_eval.py   # free-text routing accuracy (LLM part needs a real key)
 python3 tests/load_test.py --rate 6 --duration 60   # capacity (docs/go-live.md §1)
 tests/restore_drill.sh                   # backup -> restore -> compare every table -> purge the copy

@@ -58,7 +58,8 @@ x-n8n-env: &n8n-env
   WA_API_BASE: ${WA_API_BASE:-https://graph.facebook.com}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
-  LLM_ENABLED: ${LLM_ENABLED:-true}
+  # off at launch (decision 3 Nov 2026): keywords and menus only; set true + ANTHROPIC_API_KEY to enable
+  LLM_ENABLED: ${LLM_ENABLED:-false}
   LLM_MODEL: ${LLM_MODEL:-claude-haiku-4-5}
   PHONE_HASH_SECRET: ${PHONE_HASH_SECRET:?set PHONE_HASH_SECRET}
   # daily report e-mail (optional; WhatsApp admin_alert is always sent)
