@@ -98,12 +98,25 @@ services:
       timeout: 5s
       retries: 10
 
+  # One-shot: a new named volume is owned by root, but n8n (citizen photos) and the
+  # portal (officer proof) both write into it as uid 1000 ("node"). Without this
+  # every photo fails with EACCES. Runs on every `up`, takes a second, then exits.
+  media-init:
+    image: postgres:16.13            # already pulled for the database; any image with chown works
+    user: root
+    restart: "no"
+    entrypoint: ["chown", "1000:1000", "/data/complaint-media"]
+    volumes:
+      - complaint_media:/data/complaint-media
+
   n8n:
     image: n8nio/n8n:2.40.5
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+      media-init:
+        condition: service_completed_successfully
     environment: *n8n-env
     volumes:
       - n8n_data:/home/node/.n8n
@@ -129,6 +142,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      media-init:
+        condition: service_completed_successfully
     environment: *n8n-env
     volumes:
       - complaint_media:/data/complaint-media
@@ -184,6 +199,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      media-init:
+        condition: service_completed_successfully
     environment:
       ENV: ${ENV:-prod}
       PORTAL_DB_HOST: postgres

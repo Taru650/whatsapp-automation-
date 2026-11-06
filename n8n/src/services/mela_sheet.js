@@ -54,7 +54,8 @@ function normPhone(raw) {
 
 function normDate(raw) {
   const s = cell(raw);
-  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  // year first (2026-11-24, 2026/11/24 - Google Sheets' own yyyy/mm/dd date format): unambiguous
+  let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
   if (m) return iso(+m[1], +m[2], +m[3]);
   m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/); // DD/MM/YYYY (Indian order)
   if (m) return iso(+m[3], +m[2], +m[1]);

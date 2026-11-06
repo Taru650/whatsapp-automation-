@@ -81,3 +81,11 @@ test('media: a download failure after a good lookup is reported, not thrown', as
   const r = await downloadMedia('MID1', 'image/jpeg', cfg, http);
   assert.equal(r.error, 'download_failed');
 });
+
+test('media: the HTTP status of a failure is kept as the reason (shows up in message_log.detail)', async () => {
+  const { why } = require('../../n8n/src/core/media.js');
+  assert.equal(why({ httpCode: '401' }), '401');
+  assert.equal(why({ response: { status: 404 } }), '404');
+  assert.equal(why({ code: 'ETIMEDOUT' }), 'ETIMEDOUT');
+  assert.equal(why(null), '');
+});

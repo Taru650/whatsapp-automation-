@@ -29,12 +29,13 @@ export function mela() {
     '={{ [ $itemIndex ] }}');
   const handle = w.code('Handle', { modules: ['services/mela.js'], main: `
 const { _router, ...req } = $('When Called').item.json;
-const snap = $json.snap || {};
+const llmOn = String($env.LLM_ENABLED ?? 'true') !== 'false' && String($json.llm_setting) !== 'false';
+// AI off -> no "Ask a question" row in the menu (mela.js qaOn)
+const snap = { ...($json.snap || {}), qa_enabled: llmOn };
 let out = melaHandle(req, snap);
 if (out.qa_request) {
   // General question: answer only from the approved Mela text (never invents numbers;
   // the core phone guard double-checks anything that looks like one).
-  const llmOn = String($env.LLM_ENABLED ?? 'true') !== 'false' && String($json.llm_setting) !== 'false';
   let resp = { error: { message: 'llm disabled' } };
   if (llmOn) {
     try {
@@ -84,7 +85,7 @@ if (input.kind === 'image' || input.kind === 'document') {
   try {
     const dl = await downloadMedia(input.media_id, input.mime, cfg, this.helpers.httpRequest.bind(this.helpers));
     if (dl.error) {
-      input = { ...input, media_error: dl.error };
+      input = { ...input, media_error: dl.error + (dl.reason ? ':' + dl.reason : '') };
     } else {
       const sha256 = crypto.createHash('sha256').update(dl.buffer).digest('hex');
       const ext = dl.kind === 'pdf' ? 'pdf' : (dl.mime === 'image/png' ? 'png' : 'jpg');
@@ -95,7 +96,8 @@ if (input.kind === 'image' || input.kind === 'document') {
       input = { ...input, media_path: rel, media_mime: dl.mime, media_kind: dl.kind, media_sha256: sha256 };
     }
   } catch (e) {
-    input = { ...input, media_error: 'download_failed' };
+    // fs/crypto failure after a good download, e.g. EACCES on the media volume
+    input = { ...input, media_error: 'save_failed:' + String((e && (e.code || e.message)) || '').slice(0, 40) };
   }
 }
 return { json: { ...req, input } };
