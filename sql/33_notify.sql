@@ -78,7 +78,17 @@ BEGIN
                'to', CASE WHEN z.wa_number_enc IS NULL THEN NULL
                           ELSE (SELECT CASE WHEN d ~ '^[6-9][0-9]{9}$' THEN '91' || d ELSE d END
                                 FROM (SELECT pgp_sym_decrypt(z.wa_number_enc, p_enc_key) AS d) s) END,
-               'lang', coalesce(z.lang, g.lang, 'hi')) ORDER BY c.id), '[]'::jsonb)
+               'lang', coalesce(z.lang, g.lang, 'hi'),
+               -- closing update: the officer's proof photo can follow as a normal
+               -- WhatsApp image (core-12-closure-photo), which Meta allows only
+               -- within 24 h of the citizen's last message
+               'photo_path', CASE WHEN c.payload->>'status' IN ('closed', 'resolved') THEN
+                   (SELECT e.file_path FROM grievance.complaint_evidence e
+                    WHERE e.complaint_id = c.complaint_id AND e.uploaded_by = 'officer' AND e.kind = 'photo'
+                    ORDER BY e.id LIMIT 1) END,
+               'in_window', EXISTS (SELECT 1 FROM core.message_log m
+                    WHERE m.wa_hash = c.wa_hash AND m.direction = 'in' AND m.ts > now() - interval '23 hours 50 minutes')
+               ) ORDER BY c.id), '[]'::jsonb)
     INTO r
     FROM claimed c
     LEFT JOIN core.citizens z ON z.wa_hash = c.wa_hash
@@ -112,7 +122,8 @@ BEGIN
     FOR e IN SELECT * FROM jsonb_array_elements(coalesce(p, '[]'::jsonb)) LOOP
         IF coalesce((e->>'ok')::boolean, false) THEN
             UPDATE grievance.notification_outbox
-            SET status = 'sent', sent_at = now(), last_error = NULL, out_id = e->>'out_id'
+            SET status = 'sent', sent_at = now(), last_error = NULL, out_id = e->>'out_id',
+                photo_status = CASE WHEN coalesce((e->>'photo')::boolean, false) THEN 'pending' ELSE photo_status END
             WHERE id = (e->>'id')::bigint AND status = 'sending';
             IF FOUND THEN n_sent := n_sent + 1; END IF;
         ELSE
@@ -120,7 +131,8 @@ BEGIN
             UPDATE grievance.notification_outbox
             SET status = CASE WHEN attempts >= 5 OR coalesce((e->>'final')::boolean, false) THEN 'failed' ELSE 'pending' END,
                 next_attempt_at = now() + make_interval(mins => power(2, least(attempts, 6))::int),
-                last_error = v_err
+                last_error = v_err,
+                photo_status = CASE WHEN coalesce((e->>'photo')::boolean, false) THEN 'pending' ELSE photo_status END
             WHERE id = (e->>'id')::bigint AND status = 'sending'
             RETURNING status, complaint_id INTO v_status, v_cid;
             IF v_status = 'failed' THEN
@@ -134,9 +146,73 @@ BEGIN
     RETURN jsonb_build_object('sent', n_sent, 'retrying', n_retry, 'failed', v_failed);
 END $$;
 
+-- ---------------------------------------------------------------------------
+-- Officer's proof photo after a closing update (core-12-closure-photo).
+-- finish_notifications marks it 'pending' when the citizen wrote within 24 h;
+-- the photo workflow claims it here, uploads the file to WhatsApp and sends it
+-- as an image with the officer's remark as caption. One attempt: a photo is a
+-- courtesy on top of the template, never retried into the citizen's chat.
+ALTER TABLE grievance.notification_outbox
+    ADD COLUMN IF NOT EXISTS photo_status text CHECK (photo_status IN ('pending', 'sending', 'sent', 'failed')),
+    ADD COLUMN IF NOT EXISTS photo_error text;
+
+CREATE OR REPLACE FUNCTION svc_complaint.claim_closure_photos(p_limit int, p_enc_key text) RETURNS jsonb
+LANGUAGE plpgsql AS $$
+DECLARE r jsonb;
+BEGIN
+    WITH picked AS (
+        SELECT o.id FROM grievance.notification_outbox o
+        WHERE o.photo_status = 'pending'
+           OR (o.photo_status = 'sending' AND o.claimed_at < now() - interval '10 minutes')
+        ORDER BY o.id
+        LIMIT greatest(1, least(coalesce(p_limit, 20), 50))
+        FOR UPDATE SKIP LOCKED
+    ), claimed AS (
+        UPDATE grievance.notification_outbox o
+        SET photo_status = 'sending', claimed_at = now()
+        FROM picked WHERE o.id = picked.id
+        RETURNING o.id, o.complaint_id, o.wa_hash, o.payload
+    )
+    SELECT coalesce(jsonb_agg(jsonb_build_object(
+               'id', c.id, 'complaint_id', c.complaint_id, 'wa_hash', c.wa_hash, 'payload', c.payload,
+               'to', CASE WHEN z.wa_number_enc IS NULL THEN NULL
+                          ELSE (SELECT CASE WHEN d ~ '^[6-9][0-9]{9}$' THEN '91' || d ELSE d END
+                                FROM (SELECT pgp_sym_decrypt(z.wa_number_enc, p_enc_key) AS d) s) END,
+               'lang', coalesce(z.lang, g.lang, 'hi'),
+               'photo_path', ev.file_path, 'photo_mime', ev.mime_type) ORDER BY c.id), '[]'::jsonb)
+    INTO r
+    FROM claimed c
+    LEFT JOIN core.citizens z ON z.wa_hash = c.wa_hash
+    LEFT JOIN grievance.complaints g ON g.complaint_id = c.complaint_id
+    LEFT JOIN LATERAL (SELECT e.file_path, e.mime_type FROM grievance.complaint_evidence e
+                       WHERE e.complaint_id = c.complaint_id AND e.uploaded_by = 'officer' AND e.kind = 'photo'
+                       ORDER BY e.id LIMIT 1) ev ON true;
+    RETURN r;
+END $$;
+
+-- [{id, ok, error?}] -> photo_status sent/failed (error masked like last_error)
+CREATE OR REPLACE FUNCTION svc_complaint.finish_closure_photos(p jsonb) RETURNS jsonb
+LANGUAGE plpgsql AS $$
+DECLARE
+    e jsonb;
+    n_sent int := 0;
+    n_failed int := 0;
+BEGIN
+    FOR e IN SELECT * FROM jsonb_array_elements(coalesce(p, '[]'::jsonb)) LOOP
+        UPDATE grievance.notification_outbox
+        SET photo_status = CASE WHEN coalesce((e->>'ok')::boolean, false) THEN 'sent' ELSE 'failed' END,
+            photo_error = CASE WHEN coalesce((e->>'ok')::boolean, false) THEN NULL
+                               ELSE left(svc_complaint.mask_numbers(coalesce(e->>'error', 'unknown error')), 300) END
+        WHERE id = (e->>'id')::bigint AND photo_status = 'sending';
+        IF coalesce((e->>'ok')::boolean, false) THEN n_sent := n_sent + 1; ELSE n_failed := n_failed + 1; END IF;
+    END LOOP;
+    RETURN jsonb_build_object('sent', n_sent, 'failed', n_failed);
+END $$;
+
 -- claim_notifications decrypts citizens' numbers: n8n's own user only
 -- (same as core.run_purge), never the portal or Metabase.
 REVOKE EXECUTE ON FUNCTION svc_complaint.claim_notifications(int, text), svc_complaint.finish_notifications(jsonb) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION svc_complaint.claim_closure_photos(int, text), svc_complaint.finish_closure_photos(jsonb) FROM PUBLIC;
 
 -- The portal (via grievance_app) reads delivery status for the complaint page;
 -- new objects above need the same grants as the rest of the schema.

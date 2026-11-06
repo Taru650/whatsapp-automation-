@@ -80,3 +80,19 @@ test('notify: renders to a valid Cloud API template payload', () => {
   assert.equal(payload.to, '919000000001');
   assert.equal(payload.template.components[0].parameters.length, 3);
 });
+
+test('closure photo: image with the officer remark as caption; a phone number in it is never shown', () => {
+  const photo = (...a) => vm.runInContext('buildClosurePhoto', ctx)(...a);
+  const m = JSON.parse(JSON.stringify(photo({ complaint_id: 'SCB-2026-C00007', status: 'closed', remark: 'Pipe repaired near gate 2' }, 'en', 'MID9')));
+  assert.equal(m[0].type, 'image');
+  assert.equal(m[0].media_id, 'MID9');
+  assert.match(m[0].caption, /SCB-2026-C00007/);
+  assert.match(m[0].caption, /Pipe repaired near gate 2/);
+  const p = JSON.parse(JSON.stringify(render(m[0], '919000000001')));
+  assert.equal(p[0].type, 'image');
+  assert.equal(p[0].image.id, 'MID9');
+  assert.match(vm.runInContext('visibleText', ctx)(p[0]), /Pipe repaired/, 'caption goes through the phone guard');
+  const hi = JSON.parse(JSON.stringify(photo({ complaint_id: 'SCB-2026-C00007', status: 'closed', remark: 'call 9876543210' }, 'hi', 'MID9')));
+  assert.ok(!/9876543210/.test(hi[0].caption));
+  assert.match(hi[0].caption, /शिकायत/);
+});

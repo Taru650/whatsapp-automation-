@@ -95,6 +95,9 @@ function renderMessage(msg, to) {
       }];
     case 'template':
       return [{ ...base, type: 'template', template: msg.template }];
+    case 'image':
+      // an already-uploaded media id (POST /{phone-number-id}/media); caption max 1024
+      return [{ ...base, type: 'image', image: { id: msg.media_id, ...(msg.caption ? { caption: cut(msg.caption, LIMITS.body) } : {}) } }];
     default:
       throw new Error(`unknown message type: ${msg.type}`);
   }
@@ -114,6 +117,7 @@ function visibleText(payload) {
     }
   }
   if (payload.location) out.push(payload.location.name, payload.location.address);
+  if (payload.image) out.push(payload.image.caption);
   return out.filter(Boolean).join('\n');
 }
 

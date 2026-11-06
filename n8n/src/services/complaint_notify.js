@@ -76,4 +76,16 @@ function buildStatusNotification(payload, lang, opts = {}) {
   }];
 }
 
-if (typeof module !== 'undefined') module.exports = { buildStatusNotification, statusLabel, citizenNote, NOTE_MAX };
+// The officer's proof photo after a closing update, as a normal image message
+// (allowed only within 24 h of the citizen's last message; the poll checks that).
+// The caption repeats the officer's note, so the citizen still gets it when the
+// template itself could not be delivered (e.g. not approved by Meta yet).
+function buildClosurePhoto(payload, lang, mediaId) {
+  const p = payload || {};
+  const l = notifyLang(lang);
+  const head = l === 'en' ? `📷 Photo of the work done – complaint ${p.complaint_id}` : `📷 किए गए काम की फ़ोटो – शिकायत ${p.complaint_id}`;
+  const label = l === 'en' ? "Officer's remark" : 'अधिकारी की टिप्पणी';
+  return [{ type: 'image', media_id: mediaId, caption: `${head}\n${label}: ${citizenNote(p, l)}` }];
+}
+
+if (typeof module !== 'undefined') module.exports = { buildStatusNotification, buildClosurePhoto, statusLabel, citizenNote, NOTE_MAX };

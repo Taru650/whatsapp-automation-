@@ -9,8 +9,12 @@
 // free of fs/network access, same as melaHandle.
 //
 // Returns the service contract output, plus optionally
-//   effects: [{ type: 'create_complaint', category_key, description, lang,
+//   effects: [{ type: 'reset_draft' } | { type: 'create_complaint', category_key, description, lang,
 //               lat, lon, evidence: [{path, mime, kind, sha256}] }]
+// Photos: the workflow appends each one to svc_complaint.drafts under a row
+// lock (an album arrives as parallel messages) and passes the result as
+// input.draft = { added, duplicate, count }; snap.draft_evidence_count is the
+// list's length before this turn. Those, not the session copy, are the truth.
 // applied by the workflow (svc_complaint.apply_effects), which then calls
 // complaintReceiptMessage() for the real confirmation text (the complaint_id
 // does not exist until that DB call runs) - the same two-phase pattern Mela
@@ -95,6 +99,7 @@ function describePrompt(req, categoryKey, categoryLabel) {
     messages: [{ type: 'text', body: cmpT(lang, 'Please describe the issue in your own words.', 'कृपया समस्या को अपने शब्दों में बताएं।') }],
     next_state: 'cmp.describe', context: { category_key: categoryKey, category_label: categoryLabel }, done: false,
     log: { subtype: 'describe_prompt', resolved: true },
+    effects: [{ type: 'reset_draft' }], // a new complaint starts with no photos
   };
 }
 
@@ -102,8 +107,8 @@ function evidencePrompt(req, ctx) {
   const lang = req.lang;
   return {
     messages: [{ type: 'text', body: cmpT(lang,
-      'Now send at least one photo of the issue (required). You can send up to 5. Type *done* when finished.',
-      'अब समस्या की कम से कम एक फ़ोटो भेजें (आवश्यक)। आप अधिकतम 5 भेज सकते हैं। पूरा होने पर *done* लिखें।') }],
+      'Now take a photo of the issue with your camera 📷 and send it (required). Send one photo at a time, up to 5. Type *done* when finished.',
+      'अब कैमरा 📷 से समस्या की फ़ोटो खींचकर भेजें (आवश्यक)। एक बार में एक फ़ोटो भेजें, अधिकतम 5। पूरा होने पर *done* लिखें।') }],
     next_state: 'cmp.evidence', context: ctx, done: false, log: { subtype: 'evidence_prompt', resolved: true },
   };
 }
@@ -135,14 +140,26 @@ function addEvidence(req, ctx, input) {
   const lang = req.lang;
   const list = (ctx.evidence || []).slice();
   const doneBtn = { id: 'cmp:evidence:done', title: cmpT(lang, '✅ Done', '✅ हो गया') };
-  if (list.length >= MAX_EVIDENCE) {
+  const d = input.draft;
+  if (d && d.duplicate) {
+    return { messages: [{ type: 'buttons', body: cmpT(lang, `That photo is already added (${d.count}/5). Send another photo, or tap Done.`, `यह फ़ोटो पहले ही जुड़ चुकी है (${d.count}/5)। और फ़ोटो भेजें या Done दबाएँ।`), buttons: [doneBtn] }],
+      next_state: 'cmp.evidence', context: ctx, done: false, log: { subtype: 'evidence_duplicate', resolved: true } };
+  }
+  if (d ? !d.added : list.length >= MAX_EVIDENCE) {
     return { messages: [{ type: 'buttons', body: cmpT(lang, 'You already added the maximum of 5 files.', 'आपने अधिकतम 5 फ़ाइलें जोड़ दी हैं।'), buttons: [doneBtn] }],
       next_state: 'cmp.evidence', context: { ...ctx, evidence: list }, done: false, log: { subtype: 'evidence_full', resolved: true } };
   }
   list.push({ path: input.media_path, mime: input.media_mime, kind: input.media_kind, sha256: input.media_sha256 });
-  const body = cmpT(lang, `Added (${list.length}/5). Send another photo, or tap Done.`, `जोड़ा गया (${list.length}/5)। और फ़ोटो भेजें या Done दबाएँ।`);
+  const n = d ? d.count : list.length;
+  const body = cmpT(lang, `Added (${n}/5). Send another photo, or tap Done.`, `जोड़ा गया (${n}/5)। और फ़ोटो भेजें या Done दबाएँ।`);
   return { messages: [{ type: 'buttons', body, buttons: [doneBtn] }],
     next_state: 'cmp.evidence', context: { ...ctx, evidence: list }, done: false, log: { subtype: 'evidence_added', resolved: true } };
+}
+
+// Photos in the draft (all parallel turns) or, without one, in the session.
+function evidenceDone(req, snap, ctx) {
+  const n = Math.max(Number(snap.draft_evidence_count) || 0, (ctx.evidence || []).length);
+  return n ? locationPrompt(req, { ...ctx, evidence_count: n }) : evidenceNeedsPhoto(req, ctx);
 }
 
 function locationPrompt(req, ctx) {
@@ -160,7 +177,7 @@ function confirmScreen(req, ctx) {
   const lines = [
     `${cmpT(lang, '*Category:*', '*श्रेणी:*')} ${ctx.category_label || ctx.category_key}`,
     `${cmpT(lang, '*Description:*', '*विवरण:*')} ${ctx.description}`,
-    `${cmpT(lang, '*Photos attached:*', '*जोड़ी गई फ़ोटो:*')} ${(ctx.evidence || []).length}`,
+    `${cmpT(lang, '*Photos attached:*', '*जोड़ी गई फ़ोटो:*')} ${ctx.evidence_count || (ctx.evidence || []).length}`,
   ];
   const body = `${cmpT(lang, 'Please confirm your complaint:', 'कृपया अपनी शिकायत की पुष्टि करें:')}\n\n${lines.join('\n')}`;
   return {
@@ -246,7 +263,7 @@ function complaintHandle(req, snap) {
   }
   if (id === 'cmp:evidence:done') {
     if (req.state !== 'cmp.evidence') return openMenu(r);
-    return (ctx.evidence || []).length ? locationPrompt(r, ctx) : evidenceNeedsPhoto(r, ctx);
+    return evidenceDone(r, s, ctx);
   }
   if (id === 'cmp:edit') {
     return ctx.category_key ? describePrompt(r, ctx.category_key, ctx.category_label) : openMenu(r);
@@ -275,9 +292,7 @@ function complaintHandle(req, snap) {
     }
     if (input.kind === 'text') {
       const t = normalise(input.text);
-      if (t === 'done' || t === 'ho gaya' || t === 'हो गया') {
-        return (ctx.evidence || []).length ? locationPrompt(r, ctx) : evidenceNeedsPhoto(r, ctx);
-      }
+      if (t === 'done' || t === 'ho gaya' || t === 'हो गया') return evidenceDone(r, s, ctx);
     }
     return { messages: [{ type: 'text', body: cmpT(lang, 'Send a photo of the issue, or type *done* once you have added at least one.', 'समस्या की फ़ोटो भेजें, या कम से कम एक जोड़ने के बाद *done* लिखें।') }],
       next_state: 'cmp.evidence', context: ctx, done: false, log: { subtype: 'evidence_reprompt', resolved: false } };

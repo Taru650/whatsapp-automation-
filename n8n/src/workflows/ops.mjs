@@ -125,7 +125,11 @@ for (const row of rows) {
   const logs = await deliverMessages({ to: row.to, wa_hash: row.wa_hash, lang: row.lang, service_key: 'complaint', messages }, allowed, cfg, http);
   for (const l of logs) outs.push({ ...l, text: l.text || ('[' + template + '] ' + row.complaint_id + ' ' + row.payload.status) });
   const err = logs.map((l) => l.error).find(Boolean);
-  results.push({ id: row.id, ok: logs.length > 0 && !err, error: err || (logs.length ? null : 'nothing sent'), out_id: (logs[0] || {}).out_id || null });
+  // Closing update: queue the officer's proof photo for core-12-closure-photo, only
+  // inside WhatsApp's 24-hour window, once (after the template went out, or after
+  // its first failed attempt, so retries never repeat it).
+  const photo = !!(row.photo_path && row.in_window && (!err || row.attempts === 1));
+  results.push({ id: row.id, ok: logs.length > 0 && !err, error: err || (logs.length ? null : 'nothing sent'), out_id: (logs[0] || {}).out_id || null, photo });
 }
 return [{ json: { claimed: rows.length, finish: { end: null, outs }, results } }];
 ` });
@@ -156,5 +160,94 @@ return [{ json: $('Summary').first().json }];
   w.connect(needsAlert, result, 0);
   w.connect(needsAlert, alert, 1);
   w.connect(alert, result);
+  return w;
+}
+
+// ---------------------------------------------------------------------------
+// core-12-closure-photo: the officer's proof photo for a closing update, sent
+// as a WhatsApp image with the remark as caption (svc_complaint.claim_closure_photos
+// has only rows whose citizen wrote within 24 h). The upload is n8n's own HTTP
+// Request node on purpose: Code nodes run in a task runner that hands every
+// request to the main process as JSON, which cannot carry a file's bytes.
+// ---------------------------------------------------------------------------
+export function closurePhoto() {
+  const w = new Workflow(IDS.photos, 'core-12-closure-photo');
+  const cron = w.add('Every Minute', 'n8n-nodes-base.scheduleTrigger', 1.2,
+    { rule: { interval: [{ field: 'cronExpression', expression: '* * * * *' }] } }, { y: -150 });
+  w.x = 0;
+  const called = w.trigger('When Called');
+  const claim = w.pg('Claim Photos',
+    'select svc_complaint.claim_closure_photos(20, $1) as batch, core.allowed_numbers() as allowed',
+    '={{ [ $env.PGCRYPTO_KEY ] }}');
+  const read = w.code('Read Photos', { mode: 'runOnceForAllItems', main: `
+const fs = require('fs');
+const path = require('path');
+const root = path.resolve($env.COMPLAINT_MEDIA_PATH || '/data/complaint-media');
+const items = [];
+for (const row of $input.first().json.batch || []) {
+  const it = { json: { row } };
+  try {
+    if (!row.to) throw new Error('no WhatsApp number on record for this citizen');
+    if (!row.photo_path) throw new Error('no officer photo on the complaint');
+    const full = path.resolve(root, row.photo_path);
+    if (!full.startsWith(root + path.sep)) throw new Error('photo path outside the media folder');
+    it.binary = { data: { data: fs.readFileSync(full).toString('base64'), mimeType: row.photo_mime || 'image/jpeg', fileName: 'proof.jpg' } };
+  } catch (e) {
+    it.json.read_error = String(e.message || e).slice(0, 200);
+  }
+  items.push(it);
+}
+return items.length ? items : [{ json: { none: true } }];
+` });
+  const any = w.switchOn('Anything Claimed?', 2, '={{ $json.none ? 0 : 1 }}');
+  const idle = w.code('Idle', { mode: 'runOnceForAllItems', main: `
+return [{ json: { claimed: 0, sent: 0, failed: 0 } }];
+` }, { y: 150 });
+  const upload = w.add('Upload Photo', 'n8n-nodes-base.httpRequest', 4.3, {
+    method: 'POST',
+    url: "={{ ($env.WA_API_BASE || 'https://graph.facebook.com') + '/' + ($env.GRAPH_API_VERSION || 'v23.0') + '/' + $env.WHATSAPP_PHONE_NUMBER_ID + '/media' }}",
+    sendHeaders: true,
+    headerParameters: { parameters: [{ name: 'Authorization', value: "={{ 'Bearer ' + $env.WHATSAPP_ACCESS_TOKEN }}" }] },
+    sendBody: true,
+    contentType: 'multipart-form-data',
+    bodyParameters: { parameters: [
+      { name: 'messaging_product', value: 'whatsapp' },
+      { name: 'type', value: "={{ $json.row.photo_mime || 'image/jpeg' }}" },
+      { parameterType: 'formBinaryData', name: 'file', inputDataFieldName: 'data' },
+    ] },
+    options: { timeout: 30000, response: { response: { neverError: true } } },
+  }, { onError: 'continueRegularOutput' });
+  const send = w.code('Send Photos', { mode: 'runOnceForAllItems', modules: NOTIFY_MODULES, main: `
+const prepared = $('Read Photos').all();
+const uploads = $input.all();
+const allowed = $('Claim Photos').first().json.allowed;
+const cfg = { base: $env.WA_API_BASE, version: $env.GRAPH_API_VERSION, phoneId: $env.WHATSAPP_PHONE_NUMBER_ID, token: $env.WHATSAPP_ACCESS_TOKEN };
+const http = this.helpers.httpRequest.bind(this.helpers);
+const outs = [];
+const results = [];
+for (let i = 0; i < prepared.length; i++) {
+  const { row, read_error } = prepared[i].json;
+  if (read_error) { results.push({ id: row.id, ok: false, error: read_error }); continue; }
+  const up = (uploads[i] || {}).json || {};
+  if (!up.id) { results.push({ id: row.id, ok: false, error: 'upload failed: ' + JSON.stringify(up.error || up).slice(0, 200) }); continue; }
+  const logs = await deliverMessages({ to: row.to, wa_hash: row.wa_hash, lang: row.lang, service_key: 'complaint',
+    messages: buildClosurePhoto(row.payload, row.lang, up.id) }, allowed, cfg, http);
+  for (const l of logs) outs.push(l);
+  const err = logs.map((l) => l.error).find(Boolean);
+  results.push({ id: row.id, ok: logs.length > 0 && !err, error: err || null });
+}
+return [{ json: { claimed: prepared.length, finish: { end: null, outs }, results } }];
+` });
+  const log = w.pg('Log Outbound', 'select core.rpc_finish_turn($1::jsonb) as r', '={{ [ JSON.stringify($json.finish) ] }}');
+  const mark = w.pg('Mark Results', 'select svc_complaint.finish_closure_photos($1::jsonb) as r',
+    "={{ [ JSON.stringify($('Send Photos').first().json.results) ] }}");
+  const result = w.code('Result', { mode: 'runOnceForAllItems', main: `
+return [{ json: { claimed: $('Send Photos').first().json.claimed, sent: $json.r.sent, failed: $json.r.failed } }];
+` });
+  w.connect(cron, claim);
+  w.chain(called, claim, read, any);
+  w.connect(any, idle, 0);
+  w.connect(any, upload, 1);
+  w.chain(upload, send, log, mark, result);
   return w;
 }

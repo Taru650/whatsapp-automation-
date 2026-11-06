@@ -77,6 +77,7 @@ export function complaint() {
   const media = w.code('Download Media', { modules: ['core/media.js'], main: `
 const req = $('When Called').item.json;
 let input = { ...req.input };
+let draftItem = null;
 if (input.kind === 'image' || input.kind === 'document') {
   const crypto = require('crypto');
   const fs = require('fs');
@@ -94,16 +95,24 @@ if (input.kind === 'image' || input.kind === 'document') {
       fs.mkdirSync(path.dirname(full), { recursive: true });
       fs.writeFileSync(full, dl.buffer);
       input = { ...input, media_path: rel, media_mime: dl.mime, media_kind: dl.kind, media_sha256: sha256 };
+      // only while collecting photos for a complaint does a file join the draft
+      if (req.state === 'cmp.evidence') draftItem = { path: rel, mime: dl.mime, kind: dl.kind, sha256 };
     }
   } catch (e) {
     // fs/crypto failure after a good download, e.g. EACCES on the media volume
     input = { ...input, media_error: 'save_failed:' + String((e && (e.code || e.message)) || '').slice(0, 40) };
   }
 }
-return { json: { ...req, input } };
+return { json: { ...req, input, draft_add: { wa_hash: req.wa_hash, item: draftItem, max: 5 } } };
 ` });
+  // Row-locked append (svc_complaint.add_draft_evidence): an album's photos arrive
+  // as parallel turns, and each must see the others. null when there is no photo.
+  const addPhoto = w.pg('Add Photo To Draft', 'select svc_complaint.add_draft_evidence($1::jsonb) as draft',
+    '={{ [ JSON.stringify($json.draft_add) ] }}');
   const handle = w.code('Handle', { modules: ['services/complaint.js'], main: `
-const { _router, route, ...req } = $json;
+const { _router, route, draft_add, ...req0 } = $('Download Media').item.json;
+const draft = $json.draft || null;
+const req = draft ? { ...req0, input: { ...req0.input, draft } } : req0;
 const snap = $('Load Complaint Data').item.json.snap || {};
 return { json: { out: complaintHandle(req, snap), wa_hash: req.wa_hash, lang: req.lang } };
 ` });
@@ -121,7 +130,7 @@ return { json: out };
 const { effects, ...out } = $json;
 return { json: out };
 ` });
-  w.chain(trig, load, media, handle, effects, finish, ret);
+  w.chain(trig, load, media, addPhoto, handle, effects, finish, ret);
   return w;
 }
 

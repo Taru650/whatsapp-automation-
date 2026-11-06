@@ -208,6 +208,9 @@ DECLARE
     v_cit       core.citizens;
     v_sess      core.sessions;
     v_recent    int;
+    v_media     int;
+    v_over      boolean;
+    v_first_over boolean;
     v_expired   boolean;
 BEGIN
     IF p_msg_id IS NOT NULL THEN
@@ -240,9 +243,22 @@ BEGIN
         UPDATE core.citizens SET notice_shown_at = now() WHERE wa_hash = v_hash;
     END IF;
 
-    SELECT count(*) INTO v_recent
+    -- Photos/PDFs are counted apart from everything else: a complaint album
+    -- (WhatsApp sends each photo as its own message) must not use up the
+    -- citizen's allowance and lock them out mid-complaint. They have their own
+    -- cap (15 per window = three complaints' worth of 5 photos).
+    SELECT count(*) FILTER (WHERE kind NOT IN ('image', 'document')),
+           count(*) FILTER (WHERE kind IN ('image', 'document'))
+    INTO v_recent, v_media
     FROM core.message_log
     WHERE wa_hash = v_hash AND direction = 'in' AND ts > now() - p_rate_window;
+    IF p_kind IN ('image', 'document') THEN
+        v_over := v_media > 15;
+        v_first_over := v_media = 16;
+    ELSE
+        v_over := v_recent > p_rate_limit;
+        v_first_over := v_recent = p_rate_limit + 1;
+    END IF;
 
     INSERT INTO core.sessions (wa_hash) VALUES (v_hash)
     ON CONFLICT (wa_hash) DO NOTHING;
@@ -255,8 +271,8 @@ BEGIN
         'lang',          v_cit.lang,
         'first_contact', v_first,
         'is_admin',      EXISTS (SELECT 1 FROM core.admins a WHERE a.wa_hash = v_hash),
-        'rate_limited',  v_recent > p_rate_limit,
-        'rate_notice',   v_recent = p_rate_limit + 1,   -- tell them once, then stay silent
+        'rate_limited',  v_over,
+        'rate_notice',   v_first_over,   -- tell them once, then stay silent
         'state',         CASE WHEN v_expired THEN NULL ELSE v_sess.state END,
         'context',       CASE WHEN v_expired THEN '{}'::jsonb ELSE v_sess.context END,
         'version',       v_sess.version

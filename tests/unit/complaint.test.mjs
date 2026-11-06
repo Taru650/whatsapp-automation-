@@ -162,3 +162,28 @@ test('haversineM: zero at the same point, realistic over ~1 degree latitude', ()
   const d = haversineM(25.0, 85.0, 26.0, 85.0);
   assert.ok(d > 110000 && d < 112000, String(d));
 });
+
+test('complaint: photos sent together (an album) - the locked draft count is the truth', () => {
+  const ev = { state: 'cmp.evidence', context: { category_key: 'water_supply', category_label: 'Water supply', description: 'no water' } };
+  const photo = (draft) => ({ kind: 'image', media_path: 'h/x.jpg', media_mime: 'image/jpeg', media_kind: 'photo', media_sha256: 'a'.repeat(64), draft });
+  // three parallel turns all saw an empty session, but the draft counted 1, 2, 3
+  const third = ok(complaintHandle(req(photo({ added: true, duplicate: false, count: 3 }), ev), snapFixture()));
+  assert.match(body(third), /Added \(3\/5\)/);
+  const dup = ok(complaintHandle(req(photo({ added: false, duplicate: true, count: 3 }), ev), snapFixture()));
+  assert.match(body(dup), /already added \(3\/5\)/);
+  const full = ok(complaintHandle(req(photo({ added: false, duplicate: false, count: 5 }), ev), snapFixture()));
+  assert.match(body(full), /maximum of 5/);
+  // Done: the session (last writer) only kept one photo, the draft has four
+  const done = ok(complaintHandle(req({ kind: 'button', id: 'cmp:evidence:done' }, ev), snapFixture({ draft_evidence_count: 4 })));
+  assert.equal(done.next_state, 'cmp.location');
+  assert.equal(done.context.evidence_count, 4);
+  const none = ok(complaintHandle(req({ kind: 'text', text: 'done' }, ev), snapFixture({ draft_evidence_count: 0 })));
+  assert.equal(none.next_state, 'cmp.evidence', 'no photo yet -> stays');
+});
+
+test('complaint: choosing a category starts a fresh photo draft; the prompt asks for a camera photo', () => {
+  const o = ok(complaintHandle(req({ kind: 'list', id: 'cmp:cat:water_supply' }), snapFixture()));
+  assert.deepEqual(o.effects, [{ type: 'reset_draft' }]);
+  const p = ok(complaintHandle(req({ kind: 'text', text: 'no water' }, { state: 'cmp.describe', context: { category_key: 'water_supply' } }), snapFixture()));
+  assert.match(body(p), /camera/);
+});
