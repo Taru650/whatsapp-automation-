@@ -158,6 +158,19 @@ through the normal send path and logs it like any other message. Each
 complaint page shows *WhatsApp updates to the citizen*: Queued / Sent /
 Retrying / Failed.
 
+The closing update carries the officer's remark. If the citizen wrote to the
+bot within the last 24 hours, `core-12-closure-photo` also sends the officer's
+proof photo as a WhatsApp image, with the remark as caption, within a minute.
+Outside 24 hours Meta allows only templates, so the citizen gets the template
+(with the remark) but no photo. Check: `... -c "select complaint_id, photo_status,
+photo_error from grievance.notification_outbox where photo_status is not null order by id desc limit 20"`.
+
+Photos and messages are counted separately for the anti-flood limit: 20 messages
+plus 15 photos per citizen per 5 minutes, so an album of complaint photos never
+locks a citizen out. Citizens can't be forced to use the camera: WhatsApp
+doesn't tell the bot whether a photo came from the camera or the gallery, so the
+bot only asks for a camera photo.
+
 **Before go-live: the `complaint_update` template must be approved by Meta.**
 These updates usually go out days after the citizen last wrote, outside
 WhatsApp's 24-hour window, so they are always sent as a template. Without an

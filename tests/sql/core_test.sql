@@ -67,6 +67,21 @@ BEGIN
     r2 := core.begin_turn('919000000002', 'wamid.R22', 'text', 'x', 'en', s, k);
     ASSERT (r2->>'rate_limited')::boolean AND NOT (r2->>'rate_notice')::boolean, '22nd limited silently';
 
+    -- photos count apart: 15 photos + 19 texts in 5 min are all fine (a complaint
+    -- album never locks a citizen out); the 16th photo is limited with one notice
+    FOR n IN 1..15 LOOP
+        r2 := core.begin_turn('919000000006', 'wamid.P' || n, 'image', NULL, NULL, s, k);
+        ASSERT (r2->>'rate_limited')::boolean = false, 'photo within limit at ' || n;
+    END LOOP;
+    FOR n IN 1..19 LOOP
+        r2 := core.begin_turn('919000000006', 'wamid.PT' || n, 'text', 'x', 'en', s, k);
+        ASSERT (r2->>'rate_limited')::boolean = false, 'text not limited by photos at ' || n;
+    END LOOP;
+    r2 := core.begin_turn('919000000006', 'wamid.P16', 'image', NULL, NULL, s, k);
+    ASSERT (r2->>'rate_limited')::boolean AND (r2->>'rate_notice')::boolean, '16th photo limited with notice';
+    r2 := core.begin_turn('919000000006', 'wamid.PT20', 'text', 'x', 'en', s, k);
+    ASSERT (r2->>'rate_limited')::boolean = false, 'texts still fine after the photo cap';
+
     -- admins
     PERFORM core.set_admins('9000000003, +91 90000 00004', s);
     r2 := core.begin_turn('919000000004', 'wamid.A1', 'text', 'pin', 'en', s, k);

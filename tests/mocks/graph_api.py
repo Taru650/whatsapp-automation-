@@ -7,6 +7,9 @@
 * GET  /<version>/<media-id>  -> media metadata {"url", "mime_type", "file_size"}
   for the fixed set of test media ids below (svc-complaint's evidence download)
 * GET  /__media/<media-id>    -> the (fake) bytes for that media id
+* POST /<version>/<phone_number_id>/media -> multipart upload (closure photo);
+  checks messaging_product + a non-empty file part, returns {"id": "UPLOADED_N"}
+  and records {"upload": {...}} in the captures
 * GET  /__captured   -> JSON list of every accepted/rejected request
 * POST /__reset      -> clear captures (and any /__fail_to recipients)
 * POST /__fail_to    -> {"to": "<number>"}: every later send to that number gets
@@ -29,6 +32,8 @@ FAIL_TO = set()
 MEDIA_FIXTURES = {
     "MEDIA_IMAGE_1": {"mime_type": "image/jpeg", "file_size": 2048, "bytes": b"\xff\xd8\xff" + b"fake-jpeg-bytes"},
     "MEDIA_IMAGE_2": {"mime_type": "image/jpeg", "file_size": 2048, "bytes": b"\xff\xd8\xff" + b"fake-jpeg-bytes-2"},
+    "MEDIA_IMAGE_3": {"mime_type": "image/jpeg", "file_size": 2048, "bytes": b"\xff\xd8\xff" + b"fake-jpeg-bytes-3"},
+    "MEDIA_IMAGE_4": {"mime_type": "image/jpeg", "file_size": 2048, "bytes": b"\xff\xd8\xff" + b"fake-jpeg-bytes-4"},
     "MEDIA_PDF_1": {"mime_type": "application/pdf", "file_size": 2048, "bytes": b"%PDF-1.4 fake-pdf-bytes"},
     "MEDIA_TOOBIG_1": {"mime_type": "image/jpeg", "file_size": 11 * 1024 * 1024, "bytes": b""},
     "MEDIA_BADTYPE_1": {"mime_type": "video/mp4", "file_size": 1024, "bytes": b"fake-video-bytes"},
@@ -88,6 +93,12 @@ def validate(p):
         loc = p["location"]
         if not isinstance(loc.get("latitude"), (int, float)) or not isinstance(loc.get("longitude"), (int, float)):
             errs.append("location lat/lon")
+    elif t == "image":
+        img = p.get("image") or {}
+        if not (img.get("id") or img.get("link")):
+            errs.append("image needs id or link")
+        if length(img.get("caption")) > 1024:
+            errs.append("image caption too long")
     elif t == "template":
         tpl = p["template"]
         if not tpl.get("name"):
@@ -154,6 +165,34 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 FAIL_TO.add(json.loads(raw)["to"])
             return self._send(200, {"ok": True})
+        if self.path.endswith("/media"):
+            ctype = self.headers.get("Content-Type") or ""
+            boundary = ctype.split("boundary=", 1)[1].encode() if "boundary=" in ctype else None
+            fields, file_len, file_type = {}, 0, None
+            if boundary:
+                for part in raw.split(b"--" + boundary):
+                    head, _, data = part.partition(b"\r\n\r\n")
+                    data = data[:-2] if data.endswith(b"\r\n") else data
+                    name = head.split(b'name="', 1)[1].split(b'"', 1)[0].decode() if b'name="' in head else None
+                    if name == "file":
+                        file_len = len(data)
+                        if b"Content-Type:" in head:
+                            file_type = head.split(b"Content-Type:", 1)[1].strip().decode()
+                    elif name:
+                        fields[name] = data.decode(errors="replace")
+            errs = []
+            if fields.get("messaging_product") != "whatsapp":
+                errs.append("messaging_product")
+            if not file_len:
+                errs.append("file missing")
+            with LOCK:
+                COUNTER[0] += 1
+                n = COUNTER[0]
+                CAPTURED.append({"n": n, "ts": time.time(), "path": self.path, "payload": {},
+                                 "upload": {"fields": fields, "bytes": file_len, "file_type": file_type}, "errors": errs})
+            if errs:
+                return self._send(400, {"error": {"message": "; ".join(errs), "type": "OAuthException", "code": 100}})
+            return self._send(200, {"id": f"UPLOADED_{n}"})
         if not self.path.endswith("/messages"):
             return self._send(404, {"error": "not found"})
         try:

@@ -948,6 +948,7 @@ def complaint_keyword_takes_over_from_mela_without_editing_mela():
 
 # ---------------------------------------------------------------- M8: status notifications ---
 NOTIFY_WF = "CoreNotify000001"
+PHOTO_WF = "CorePhotos000001"
 
 
 def register_complaint(u, category="cmp:cat:water_supply", text="Handpump broken near gate 3"):
@@ -982,7 +983,15 @@ def portal_start(cid, officer):
         f"values ('{cid}', 'assigned', 'in_progress', {officer}, 'Work started'); commit;")
 
 
+PROOF_JPEG = b"\xff\xd8\xff\xe0" + b"officer-proof-photo" + bytes(range(256))
+
+
 def portal_close(cid, officer, remark):
+    # the portal writes the officer's photo into the shared media volume first
+    media_root = os.environ.get("COMPLAINT_MEDIA_PATH", os.path.join(os.getcwd(), ".dev", "complaint-media"))
+    os.makedirs(os.path.join(media_root, "officer", cid), exist_ok=True)
+    with open(os.path.join(media_root, "officer", cid, "proof.jpg"), "wb") as f:
+        f.write(PROOF_JPEG)
     sql(f"begin; insert into grievance.complaint_status_history (complaint_id, from_status, to_status, changed_by_user_id, remark) "
         f"values ('{cid}', 'in_progress', 'closed', {officer}, '{remark}'); "
         f"insert into grievance.complaint_evidence (complaint_id, uploaded_by, uploaded_by_user_id, file_path, mime_type, kind, sha256) "
@@ -1031,9 +1040,19 @@ def complaint_status_changes_reach_the_citizen_as_whatsapp_templates():
 
     portal_close(cid, officer, "Replaced the pump washer; water flowing again")
     assert poll_until_sent(cid, "status_closed") == "sent"
-    out = wait_out(u, n0 + 3)
-    assert template_params(out[-1]) == [cid, "Resolved and closed", "Replaced the pump washer; water flowing again"], template_params(out[-1])
-    assert len(out) == n0 + 3, [summary(c) for c in out[n0:]]
+    run_workflow(PHOTO_WF)
+    out = wait_out(u, n0 + 4)
+    assert template_params(out[-2]) == [cid, "Resolved and closed", "Replaced the pump washer; water flowing again"], template_params(out[-2])
+    # then the officer's proof photo itself (the citizen wrote within 24 h), remark in the caption
+    img = out[-1]["payload"]
+    assert img["type"] == "image" and img["image"]["id"].startswith("UPLOADED_"), summary(out[-1])
+    assert cid in img["image"]["caption"] and "Replaced the pump washer" in img["image"]["caption"], img["image"]["caption"]
+    up = [c for c in captured() if c.get("upload") and c["n"] == int(img["image"]["id"].split("_")[1])][0]
+    assert up["upload"]["bytes"] == len(PROOF_JPEG) and up["upload"]["file_type"] == "image/jpeg", up
+    assert len(out) == n0 + 4, [summary(c) for c in out[n0:]]
+    assert scalar(f"select photo_status from grievance.notification_outbox where complaint_id = '{cid}' and template_key = 'status_closed'") == "sent"
+    assert scalar(f"select count(*) from grievance.notification_outbox where complaint_id = '{cid}' and photo_status is not null") == "1", \
+        "only the closing update carries a photo"
 
     # logged like every other outbound message, with the WhatsApp message id
     h = hash_of(u)
@@ -1046,8 +1065,62 @@ def complaint_status_changes_reach_the_citizen_as_whatsapp_templates():
     # nothing is sent twice: a later poll finds nothing due
     r = run_workflow(NOTIFY_WF)
     assert r["claimed"] == 0, r
+    assert run_workflow(PHOTO_WF)["claimed"] == 0, "the photo is sent once"
     wait_quiet(2)
-    assert len(out_to(u)) == n0 + 3
+    assert len(out_to(u)) == n0 + 4
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_closure_photo_only_inside_whatsapps_24h_window():
+    u = user()
+    cid = register_complaint(u)
+    officer = test_officer(cid)
+    # the citizen last wrote two days ago: only the approved template may go out
+    sql(f"update core.message_log set ts = now() - interval '2 days' where wa_hash = '{hash_of(u)}' and direction = 'in'")
+    n0 = len(out_to(u))
+    u0 = len([c for c in captured() if c.get("upload")])
+    portal_close(cid, officer, "Cleaned the drain")
+    assert poll_until_sent(cid, "status_closed") == "sent"
+    r = run_workflow(PHOTO_WF)
+    assert r["claimed"] == 0, r
+    out = wait_out(u, n0 + 1)
+    wait_quiet(2)
+    out = out_to(u)
+    assert len(out) == n0 + 1 and out[-1]["payload"]["type"] == "template", [summary(c) for c in out[n0:]]
+    assert template_params(out[-1])[2] == "Cleaned the drain", "the remark still reaches the citizen in the template"
+    assert len([c for c in captured() if c.get("upload")]) == u0, "nothing uploaded outside the window"
+
+
+@scenario(services=COMPLAINT_ONLY)
+def complaint_album_of_photos_sent_at_once_keeps_every_photo():
+    import threading
+    u = user()
+    for msg, n in ((m_button(u, "cmp:open"), 2), (m_button(u, "cmp:new"), 3), (m_list(u, "cmp:cat:water_supply"), 4),
+                   (m_text(u, "No water at tap 4"), 5)):
+        send(u, msg)
+        wait_out(u, n)
+    # WhatsApp delivers an album as one webhook per photo, at the same moment
+    threads = [threading.Thread(target=send, args=(u, m_image(u, media_id=f"MEDIA_IMAGE_{i}"))) for i in range(1, 5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    out = wait_out(u, 9)
+    acks = [body_of(c) for c in out[5:9]]
+    assert all("Added (" in a for a in acks), acks
+    assert sorted(a.split("(")[1].split("/")[0] for a in acks) == ["1", "2", "3", "4"], acks
+    assert not any("very quickly" in body_of(c) for c in out), "an album never trips the rate limit"
+    for msg, n in ((m_button(u, "cmp:evidence:done"), 10), (m_location(u, 25.6912, 85.1720), 11)):
+        send(u, msg)
+        wait_out(u, n)
+    out = wait_out(u, 11)
+    assert "Photos attached:* 4" in body_of(out[-1]) or "Photos attached: 4" in body_of(out[-1]).replace("*", ""), body_of(out[-1])
+    send(u, m_button(u, "cmp:confirm"))
+    wait_out(u, 12)
+    cid = scalar(f"select complaint_id from grievance.complaints where citizen_wa_hash = '{hash_of(u)}'")
+    n = scalar(f"select count(distinct sha256) from grievance.complaint_evidence where complaint_id = '{cid}' and uploaded_by = 'citizen'")
+    assert n == "4", f"all four photos of the album are on the complaint, got {n}"
+    assert scalar(f"select count(*) from svc_complaint.drafts where wa_hash = '{hash_of(u)}'") == "0", "draft cleared"
 
 
 @scenario(services=COMPLAINT_ONLY)

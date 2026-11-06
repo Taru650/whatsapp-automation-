@@ -33,8 +33,43 @@ BEGIN
     RETURN format('SCB-%s-C%s', y, lpad(seq::text, 5, '0'));
 END $$;
 
+-- The photos of a complaint being filed. WhatsApp sends an album as separate
+-- messages that n8n handles at the same moment; keeping the list in the session
+-- context lost all but one of them (each turn saw the same old list and the
+-- last save won). Each photo is appended here under a row lock instead, so
+-- concurrent turns see each other's photos and the count is always right.
+CREATE TABLE IF NOT EXISTS svc_complaint.drafts (
+    wa_hash     text PRIMARY KEY,
+    evidence    jsonb NOT NULL DEFAULT '[]',
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- p = {wa_hash, item: {path, mime, kind, sha256} | null, max}. Returns
+-- {added, count, duplicate} or null when there is no item (not a photo turn).
+CREATE OR REPLACE FUNCTION svc_complaint.add_draft_evidence(p jsonb) RETURNS jsonb
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_list jsonb;
+    v_max  int := coalesce((p->>'max')::int, 5);
+BEGIN
+    IF p IS NULL OR p->'item' IS NULL OR jsonb_typeof(p->'item') <> 'object' THEN
+        RETURN NULL;
+    END IF;
+    INSERT INTO svc_complaint.drafts (wa_hash) VALUES (p->>'wa_hash') ON CONFLICT (wa_hash) DO NOTHING;
+    SELECT evidence INTO v_list FROM svc_complaint.drafts WHERE wa_hash = p->>'wa_hash' FOR UPDATE;
+    IF EXISTS (SELECT 1 FROM jsonb_array_elements(v_list) x WHERE x->>'sha256' = p->'item'->>'sha256') THEN
+        RETURN jsonb_build_object('added', false, 'duplicate', true, 'count', jsonb_array_length(v_list));
+    END IF;
+    IF jsonb_array_length(v_list) >= v_max THEN
+        RETURN jsonb_build_object('added', false, 'duplicate', false, 'count', jsonb_array_length(v_list));
+    END IF;
+    UPDATE svc_complaint.drafts SET evidence = evidence || jsonb_build_array(p->'item'), updated_at = now()
+    WHERE wa_hash = p->>'wa_hash' RETURNING evidence INTO v_list;
+    RETURN jsonb_build_object('added', true, 'duplicate', false, 'count', jsonb_array_length(v_list));
+END $$;
+
 -- Apply service side effects (one create_complaint effect per turn).
--- p = {wa_hash, effects: [{type:'create_complaint', category_key, description,
+-- p = {wa_hash, effects: [{type:'reset_draft'} | {type:'create_complaint', category_key, description,
 --      lang, lat, lon, evidence: [{path, mime, kind, sha256}]}]}
 -- Returns {complaint_id}. Direct parallel of svc_mela.apply_effects.
 CREATE OR REPLACE FUNCTION svc_complaint.apply_effects(p jsonb) RETURNS jsonb
@@ -44,8 +79,13 @@ DECLARE
     ev     jsonb;
     v_id   text;
     v_dept int;
+    v_draft jsonb;
 BEGIN
     FOR e IN SELECT * FROM jsonb_array_elements(coalesce(p->'effects', '[]')) LOOP
+        IF e->>'type' = 'reset_draft' THEN
+            DELETE FROM svc_complaint.drafts WHERE wa_hash = p->>'wa_hash';
+            CONTINUE;
+        END IF;
         CONTINUE WHEN e->>'type' <> 'create_complaint';
         SELECT department_id INTO v_dept FROM grievance.complaint_categories WHERE category_key = e->>'category_key';
         CONTINUE WHEN v_dept IS NULL;   -- unknown category: never silently misfile
@@ -57,7 +97,11 @@ BEGIN
                 e->>'description', coalesce(e->>'lang', 'hi'), (e->>'lat')::float8, (e->>'lon')::float8, 'open',
                 now() + make_interval(days => (SELECT sla_days FROM grievance.complaint_categories WHERE category_key = e->>'category_key')));
 
-        FOR ev IN SELECT * FROM jsonb_array_elements(coalesce(e->'evidence', '[]')) LOOP
+        -- the draft is the full list (see svc_complaint.drafts); the session copy is a fallback
+        SELECT CASE WHEN jsonb_array_length(d.evidence) > 0 THEN d.evidence END INTO v_draft
+        FROM svc_complaint.drafts d WHERE d.wa_hash = p->>'wa_hash';
+        DELETE FROM svc_complaint.drafts WHERE wa_hash = p->>'wa_hash';
+        FOR ev IN SELECT * FROM jsonb_array_elements(coalesce(v_draft, e->'evidence', '[]')) LOOP
             INSERT INTO grievance.complaint_evidence (complaint_id, uploaded_by, wa_hash, file_path, mime_type, kind, sha256)
             VALUES (v_id, 'citizen', p->>'wa_hash', ev->>'path', ev->>'mime', ev->>'kind', ev->>'sha256');
         END LOOP;
@@ -89,6 +133,7 @@ LANGUAGE sql STABLE AS $$
                 'updated_at', to_char(x.updated_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:MI'))
                 ORDER BY x.created_at DESC)
             FROM (SELECT * FROM grievance.complaints WHERE citizen_wa_hash = p_wa_hash ORDER BY created_at DESC LIMIT 20) x), '[]'),
+        'draft_evidence_count', coalesce((SELECT jsonb_array_length(evidence) FROM svc_complaint.drafts WHERE wa_hash = p_wa_hash), 0),
         'geofence', jsonb_build_object(
             'enabled', coalesce((SELECT value FROM grievance.settings WHERE key = 'geofence_enabled'), 'false'::jsonb),
             'center_lat', (SELECT value FROM grievance.settings WHERE key = 'geofence_center_lat'),
