@@ -85,6 +85,9 @@ test('sheet: phone/date/time normalisation', () => {
   assert.equal(normDate('24/11/2026'), '2026-11-24');
   assert.equal(normDate('2026-11-24'), '2026-11-24');
   assert.equal(normDate('31/02/2026'), null);
+  assert.equal(normDate('2025/11/30'), '2025-11-30', "Google Sheets' yyyy/mm/dd format");
+  assert.equal(normDate('2026/02/31'), null);
+  assert.equal(normTime('7:00 PM'), '19:00');
   assert.equal(normTime('6:30 PM'), '18:30');
   assert.equal(normTime('06:00'), '06:00');
   assert.equal(normTime('25:00'), null);
