@@ -11,6 +11,14 @@
 const ALLOWED_MIME = { 'image/jpeg': 'photo', 'image/png': 'photo', 'application/pdf': 'pdf' };
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 
+// Short reason kept in core.message_log.detail (64 chars): the HTTP status or
+// error code tells an operator *why* a photo failed (401 token, 404 media gone...).
+function why(e) {
+  const r = (e && e.response) || {};
+  const c = (e && (e.httpCode || e.statusCode || e.status || e.code)) || r.status || r.statusCode || '';
+  return String(c).slice(0, 20);
+}
+
 function mimeKind(mime) {
   return ALLOWED_MIME[mime] || null;
 }
@@ -30,7 +38,7 @@ async function downloadMedia(mediaId, declaredMime, cfg, http) {
   try {
     meta = await fetchMediaMeta(mediaId, cfg, http);
   } catch (e) {
-    return { error: 'media_lookup_failed' };
+    return { error: 'media_lookup_failed', reason: why(e) };
   }
   if (!meta || !meta.url) return { error: 'media_lookup_failed' };
   const kind = mimeKind(meta.mime_type || declaredMime);
@@ -44,7 +52,7 @@ async function downloadMedia(mediaId, declaredMime, cfg, http) {
     res = await http({ method: 'GET', url: meta.url, timeout: 20000, encoding: 'arraybuffer',
       returnFullResponse: true, headers: { Authorization: `Bearer ${cfg.token}` } });
   } catch (e) {
-    return { error: 'download_failed' };
+    return { error: 'download_failed', reason: why(e) };
   }
   const body = res && res.body;
   // a text body means the bytes were already decoded (and damaged): refuse rather than store it
@@ -55,4 +63,4 @@ async function downloadMedia(mediaId, declaredMime, cfg, http) {
   return { buffer, mime: meta.mime_type || declaredMime, kind };
 }
 
-if (typeof module !== 'undefined') module.exports = { fetchMediaMeta, downloadMedia, mimeKind, ALLOWED_MIME, MAX_BYTES };
+if (typeof module !== 'undefined') module.exports = { why, fetchMediaMeta, downloadMedia, mimeKind, ALLOWED_MIME, MAX_BYTES };

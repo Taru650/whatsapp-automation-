@@ -206,8 +206,14 @@ function melaOut(messages, extra = {}) {
 }
 
 // ---- screens -------------------------------------------------------------------------
-function melaMenu(req, snap, prefixText) {
-  const lang = req.lang;
+// The free-question ("Ask") row is the only part of the menu that needs the AI; the
+// workflow sets snap.qa_enabled = false while it is switched off, and the row goes.
+function qaOn(snap) {
+  return snap.qa_enabled !== false;
+}
+
+// Every menu row the data supports, in display order (Ask excluded).
+function menuRows(lang, snap) {
   const rows = [];
   const add = (id, en, hi, den, dhi) => rows.push({ id, title: melaT(lang, en, hi), description: melaT(lang, den || '', dhi || '') });
   if ((snap.events || []).length) add('mela:today', "Today's programme", 'आज का कार्यक्रम', 'Cultural programme and artists', 'सांस्कृतिक कार्यक्रम व कलाकार');
@@ -215,10 +221,25 @@ function melaMenu(req, snap, prefixText) {
   if (catsWithCoords(snap).length) add('mela:near', '📍 Near me', '📍 मेरे पास', 'Nearest police, health, vet camp', 'नज़दीकी थाना, अस्पताल, पशु शिविर');
   for (const c of categoriesPresent(snap)) add(`mela:cat:${c}`, `${catIcon(c)} ${catLabel(snap, c, 'en')}`, `${catIcon(c)} ${catLabel(snap, c, 'hi')}`);
   if ((snap.guidelines || []).length) add('mela:rules', "Do's & don'ts", 'क्या करें, क्या न करें');
-  add('mela:ask', 'Ask a question', 'सवाल पूछें', 'History, timings, general info', 'इतिहास, समय, सामान्य जानकारी');
-  // WhatsApp lists hold 10 rows: keep the first 9 and always keep "Ask".
-  const ask = rows.pop();
-  const shown = rows.slice(0, 9).concat([ask]);
+  return rows;
+}
+
+// WhatsApp lists hold 10 rows. Main menu: as many rows as fit, then (only when
+// needed) a "More services" row that opens the rest, so no category is ever lost.
+const LIST_MAX = 10;
+function menuSplit(lang, snap) {
+  const rows = menuRows(lang, snap);
+  const room = LIST_MAX - (qaOn(snap) ? 1 : 0);
+  if (rows.length <= room) return { main: rows, more: [] };
+  return { main: rows.slice(0, room - 1), more: rows.slice(room - 1) };
+}
+
+function melaMenu(req, snap, prefixText) {
+  const lang = req.lang;
+  const { main, more } = menuSplit(lang, snap);
+  const shown = main.slice();
+  if (more.length) shown.push({ id: 'mela:more', title: melaT(lang, '➕ More services', '➕ अन्य सेवाएँ'), description: melaT(lang, more.map((r) => r.title).join(', ').slice(0, 72), more.map((r) => r.title).join(', ').slice(0, 72)) });
+  if (qaOn(snap)) shown.push({ id: 'mela:ask', title: melaT(lang, 'Ask a question', 'सवाल पूछें'), description: melaT(lang, 'History, timings, general info', 'इतिहास, समय, सामान्य जानकारी') });
   const body = [prefixText, melaT(lang,
     '🎪 *Sonpur Mela* – what would you like to know?\n(Type *english* / *हिंदी* to change language)',
     '🎪 *सोनपुर मेला* – आप क्या जानना चाहते हैं?\n(भाषा बदलने के लिए *english* / *हिंदी* लिखें)')].filter(Boolean).join('\n\n');
@@ -226,6 +247,18 @@ function melaMenu(req, snap, prefixText) {
     messages: [{ type: 'list', body, button: melaT(lang, 'Choose', 'चुनें'),
       sections: [{ title: melaT(lang, 'Sonpur Mela', 'सोनपुर मेला'), rows: shown }] }],
     next_state: null, context: {}, done: false, log: { subtype: 'menu', resolved: true },
+  };
+}
+
+function moreMenu(req, snap) {
+  const lang = req.lang;
+  const { more } = menuSplit(lang, snap);
+  if (!more.length) return melaMenu(req, snap);
+  const rows = more.slice(0, LIST_MAX - 1).concat([{ id: 'mela:open', title: melaT(lang, '🏠 Main menu', '🏠 मुख्य मेनू'), description: '' }]);
+  return {
+    messages: [{ type: 'list', body: melaT(lang, '🎪 *Sonpur Mela* – more services', '🎪 *सोनपुर मेला* – अन्य सेवाएँ'), button: melaT(lang, 'Choose', 'चुनें'),
+      sections: [{ title: melaT(lang, 'More services', 'अन्य सेवाएँ'), rows }] }],
+    next_state: null, context: {}, done: false, log: { subtype: 'menu_more', resolved: true },
   };
 }
 
@@ -531,6 +564,8 @@ function melaHandle(req, snap) {
   if (id === 'mela:roster:control') return controlScreen(r, s, true);
   if (id === 'mela:rules') return rulesScreen(r, s);
   if (id === 'mela:near') return nearChooser(r, s);
+  if (id === 'mela:more') return moreMenu(r, s);
+  if (id === 'mela:ask' && !qaOn(s)) return melaMenu(r, s); // a button from before the AI was switched off
   if (id === 'mela:ask') {
     return { messages: [{ type: 'text', body: melaT(lang, '❓ Type your question about Sonpur Mela (history, timings, what to see…).', '❓ सोनपुर मेले के बारे में अपना सवाल लिखें (इतिहास, समय, क्या देखें…)।') }],
       next_state: 'mela.await_question', context: {}, done: false, log: { subtype: 'ask_prompt', resolved: true } };
@@ -619,7 +654,7 @@ function melaQaFinish(req, snap, resp) {
     try { data = JSON.parse(((resp.content || []).find((b) => b.type === 'text') || {}).text); } catch (e) { data = null; }
   }
   const tokens = resp && resp.usage ? (resp.usage.input_tokens || 0) + (resp.usage.output_tokens || 0) : 0;
-  const buttons = [{ id: 'mela:ask', title: melaT(lang, '❓ Ask another', '❓ और सवाल') }, menuBtn(lang)];
+  const buttons = qaOn(snap || {}) ? [{ id: 'mela:ask', title: melaT(lang, '❓ Ask another', '❓ और सवाल') }, menuBtn(lang)] : [menuBtn(lang)];
   if (data && data.answerable && data.answer) {
     return { messages: [{ type: 'buttons', body: String(data.answer).slice(0, 1000), buttons }], next_state: null, context: {}, done: true,
       log: { subtype: 'ask', resolved: true, llm_tokens: tokens } };

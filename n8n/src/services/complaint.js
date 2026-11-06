@@ -125,7 +125,7 @@ const MEDIA_ERROR_MESSAGES = {
 
 function evidenceError(req, ctx, errorCode) {
   const lang = req.lang;
-  const m = MEDIA_ERROR_MESSAGES[errorCode];
+  const m = MEDIA_ERROR_MESSAGES[String(errorCode).split(':')[0]];
   const body = m ? cmpT(lang, m.en, m.hi) : cmpT(lang, 'Sorry, that file could not be received. Please try again.', 'माफ़ कीजिए, वह फ़ाइल प्राप्त नहीं हो सकी। कृपया फिर से भेजें।');
   return { messages: [{ type: 'text', body }], next_state: 'cmp.evidence', context: ctx, done: false,
     log: { subtype: 'evidence_error', resolved: false, detail: String(errorCode).slice(0, 64) } };

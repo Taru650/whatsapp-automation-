@@ -98,6 +98,43 @@ test('shift boundaries including shift 3 across midnight', () => {
 });
 
 // --- screens ---------------------------------------------------------------------------
+test('menu: AI off -> no "Ask a question" row, and an old Ask button just shows the menu', () => {
+  const snap = { ...snapshot(), qa_enabled: false };
+  const m = ok(melaHandle(req({ kind: 'open', id: 'mela:open' }), snap));
+  const ids = m.messages[0].sections[0].rows.map((r) => r.id);
+  assert.ok(!ids.includes('mela:ask'), ids.join());
+  assert.ok(!JSON.stringify(m).includes('History'));
+  const old = ok(melaHandle(req({ kind: 'list', id: 'mela:ask' }), snap));
+  assert.equal(old.messages[0].type, 'list');
+  assert.equal(old.next_state, null);
+  const unanswered = melaQaFinish(req({}), snap, { error: { message: 'llm disabled' } });
+  assert.deepEqual(unanswered.messages[0].buttons.map((b) => b.id).filter((i) => i === 'mela:ask'), []);
+});
+
+test('menu: more than 10 rows -> "More services" holds the rest, nothing is dropped', () => {
+  const tabs = cleanTabs();
+  const cols = tabs.places[0];
+  const extra = (id, cat) => { const row = cols.map(() => ''); row[cols.indexOf('id')] = id; row[cols.indexOf('category')] = cat;
+    row[cols.indexOf('name_en')] = id + ' desk'; row[cols.indexOf('name_hi')] = id + ' केंद्र'; row[cols.indexOf('active')] = 'yes'; row[cols.indexOf('verified')] = 'yes'; return row; };
+  tabs.places.push(extra('AC01', 'accommodation'), extra('TW01', 'toilet_water'), extra('LF01', 'lost_found'), extra('HD01', 'help_desk'));
+  for (const qa of [true, false]) {
+    const snap = { ...snapshot(tabs, { TH01: { lat: 25.69, lon: 85.17 } }), qa_enabled: qa };
+    const m = ok(melaHandle(req({ kind: 'open', id: 'mela:open' }), snap));
+    const ids = m.messages[0].sections[0].rows.map((r) => r.id);
+    assert.equal(ids.length, 10, ids.join());
+    assert.ok(ids.includes('mela:more'));
+    assert.equal(ids.includes('mela:ask'), qa);
+    const more = ok(melaHandle(req({ kind: 'list', id: 'mela:more' }), snap));
+    const moreIds = more.messages[0].sections[0].rows.map((r) => r.id);
+    assert.equal(moreIds[moreIds.length - 1], 'mela:open');
+    const all = ids.concat(moreIds);
+    for (const c of ['thana', 'health_centre', 'vet_camp', 'parking', 'ghat', 'accommodation', 'toilet_water', 'lost_found', 'help_desk']) {
+      assert.ok(all.includes(`mela:cat:${c}`), `${c} reachable (qa=${qa})`);
+    }
+    assert.ok(all.includes('mela:today') && all.includes('mela:control') && all.includes('mela:near'));
+  }
+});
+
 test('menu: data-driven, max 10 rows, near hidden until coordinates exist', () => {
   const m = ok(melaHandle(req({ kind: 'open', id: 'mela:open' }), snapshot()));
   const ids = m.messages[0].sections[0].rows.map((r) => r.id);

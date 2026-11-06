@@ -104,6 +104,7 @@ With no data, screens still work but say "no places/events found".
 | Change admin numbers | edit `ADMIN_WA_NUMBERS` → `dc run --rm migrate` (stores hashes) and `dc up -d n8n` |
 | Recent errors | `... -c "select ts, service_key, error from core.message_log where error is not null order by id desc limit 20"` |
 | Mela sync history | `... -c "select ts, status, rows, errors from core.sync_runs where service_key='mela' order by id desc limit 10"` |
+| Citizen photo "could not be received" | `... -c "select ts, detail from core.message_log where detail like '%failed%' order by id desc limit 10"`: `save_failed:EACCES` = the media volume isn't writable (`dc up -d` re-runs `media-init`, which fixes it); `media_lookup_failed:401` = `WHATSAPP_ACCESS_TOKEN` expired or wrong |
 | Unanswered questions | Metabase card "Unanswered themes", or `... -c "select * from analytics.v_unanswered_themes order by times desc limit 30"` |
 | Re-send a day's report | `curl` is not exposed; in the n8n editor open `core-85-daily-report` → *Execute workflow* (yesterday), or `... -c "select analytics.daily_report('2026-11-25')->>'text'"` |
 | Emergency UI hotfix | fix in the UI, then `scripts/n8n_export.sh`, port it to `n8n/src`, rebuild, redeploy |
