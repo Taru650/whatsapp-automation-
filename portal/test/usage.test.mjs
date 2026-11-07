@@ -14,7 +14,9 @@ let sAdmin; let sHead; let sOfficer;
 
 before(async () => {
   await t.ready;
-  tag = `u${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
+  // letters only: the page masks any run of 6+ digits as [number] (that is the
+  // point), so a tag with digits could be masked out of its own question
+  tag = `u${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`.replace(/[0-9]/g, (d) => 'abcdefghij'[d]);
   const adminUser = await t.user('admin', 'district_admin');
   const headUser = await t.user('head', 'dept_head', 'phed');
   const officerUser = await t.user('officer', 'field_officer', 'phed');
