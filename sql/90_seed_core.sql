@@ -9,8 +9,8 @@ SELECT core.register_numbers('static', ARRAY['112', '108', '1098', '1091', '101'
 
 INSERT INTO core.templates (key, hi, en, max_len) VALUES
   ('welcome_notice',
-   'नमस्ते! यह सारण ज़िला प्रशासन की WhatsApp सेवा है। सेवा बेहतर करने के लिए आपका नंबर और संदेश सुरक्षित रूप से सहेजे जाते हैं; आपकी लोकेशन कभी सहेजी नहीं जाती।',
-   'Namaste! This is the Saran District Administration WhatsApp service. Your number and messages are stored securely to improve the service; your location is never stored.',
+   E'🙏 नमस्ते! यह सोनपुर मेला की आधिकारिक WhatsApp सेवा है।\n*अतिथि देवो भव* – हरिहर क्षेत्र की पावन धरती पर आपका हार्दिक स्वागत है। आपकी मेला यात्रा सुरक्षित और मंगलमय हो!\n\n_सेवा बेहतर करने के लिए आपका नंबर और संदेश सुरक्षित रखे जाते हैं; आपकी लोकेशन कभी सहेजी नहीं जाती।_',
+   E'🙏 Namaste! This is the official Sonpur Mela WhatsApp service.\n*Atithi Devo Bhava* – a warm welcome to the sacred land of Harihar Kshetra. Wishing you a safe and joyful Mela!\n\n_Your number and messages are kept securely to improve the service; your location is never stored._',
    1024),
   ('menu_prompt',        'आप क्या जानना चाहते हैं? नीचे से चुनें।', 'What would you like to know? Please choose below.', 1024),
   ('menu_button',        'सेवाएँ', 'Services', 20),
