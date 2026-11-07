@@ -48,6 +48,13 @@ change the compose port bindings to 0.0.0.0: Docker bypasses ufw.
 8. **Go-live gate for complaints:** Meta has approved the `complaint_update`
    template in English and Hindi (see *Status updates to citizens*). Until
    then, enable the complaint service only on staging.
+9. **Data notice (DPDP Act):** the welcome message no longer tells citizens
+   that their number and messages are stored (district decision, Nov 2026).
+   Put that notice in the WhatsApp Business profile description instead
+   (Meta Business Manager → WhatsApp Manager → phone number → Profile), e.g.
+   "Your number and messages are kept securely to improve the service; your
+   location is never stored. / सेवा बेहतर करने के लिए आपका नंबर और संदेश
+   सुरक्षित रखे जाते हैं; आपकी लोकेशन कभी सहेजी नहीं जाती।"
 
 ## Real-phone check on the Meta test number (15 minutes; M1 gate item)
 Prerequisite: the `mela` service must be enabled and have synced at least
