@@ -143,6 +143,7 @@ staff's addresses, so strangers never even see the sign-in page. Leave
 | District admin locked out | another district admin resets it; if there is none, create a new admin with `create_user.mjs` |
 | Someone leaves | **Staff** → *Disable* — they are signed out on their next click |
 | Who did what | `... -c "select ts, user_id, action, target, detail from grievance.portal_audit order by id desc limit 50"` |
+| WhatsApp usage (district admin only) | Portal → **Usage**: citizens per day, top topics, questions the bot could not answer (7/14/30 days). No phone numbers; admin numbers and anything before `analytics_since` are left out. Figures come from `grievance.usage_report()`, which refuses anyone but an enabled district admin |
 | Portal logs | `dc logs --tail 200 portal` |
 | Health | `curl -s https://PUBLIC_HOST/portal/healthz` → `{"ok":true,"notify_backlog":0}`; **503** means the DB is down or a citizen update has waited 10+ minutes without n8n even trying (`core-11-notify-poll` not running: check `dc logs n8n`) |
 | Locked out after wrong passwords | wait 15 minutes (the limit is per person *and* client, so others are unaffected) |

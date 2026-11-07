@@ -13,6 +13,7 @@ import { settingsRoutes } from './routes/settings.js';
 import { mediaRoutes } from './routes/media.js';
 import { closureRoutes } from './routes/closure.js';
 import { reportRoutes } from './routes/reports.js';
+import { usageRoutes } from './routes/usage.js';
 import { ROLE_LABEL, STATUS_BADGE, STATUS_LABEL, fmtTime } from './labels.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -89,6 +90,7 @@ export function createApp({ pool, config }) {
   r.use(mediaRoutes({ pool, config }));
   r.use(userRoutes({ pool, config }));
   r.use(settingsRoutes({ pool, config }));
+  r.use(usageRoutes({ pool, config }));
 
   app.use(base, r);
   app.get('/', (req, res) => res.redirect(`${base}/`));
