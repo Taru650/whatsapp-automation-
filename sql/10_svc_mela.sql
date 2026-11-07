@@ -218,11 +218,11 @@ INSERT INTO core.services (service_key, id_prefix, title_hi, title_en, descripti
                            menu_order, enabled, workflow_id, intent_hint_en, intent_hint_hi, subtypes, keywords, accepts_location)
 VALUES ('mela', 'mela', 'सोनपुर मेला', 'Sonpur Mela', 'कार्यक्रम, थाना, अस्पताल, पार्किंग, घाट', 'Programme, police, health, parking, ghats',
         10, false, 'SvcMela000000001',
-        'Anything about Sonpur Mela (Harihar Kshetra fair): programme/artists, control room, temporary police stations, health centres, veterinary camps, parking, ghats, nearest facility, rules, history and general questions.',
-        'सोनपुर मेला: कार्यक्रम, कंट्रोल रूम, थाना, अस्पताल, पशु शिविर, पार्किंग, घाट, नज़दीकी सुविधा, नियम, इतिहास',
+        'Anything about Sonpur Mela (Harihar Kshetra fair): programme/artists, control room, temporary police stations, health centres, veterinary camps, toilets, parking, ghats, nearest facility, rules, history and general questions.',
+        'सोनपुर मेला: कार्यक्रम, कंट्रोल रूम, थाना, अस्पताल, पशु शिविर, शौचालय, पार्किंग, घाट, नज़दीकी सुविधा, नियम, इतिहास',
         '{"today": "today''s cultural programme or artists", "schedule": "full programme schedule", "control": "control room, helpline, complaint, emergency",
           "thana": "police station / police help", "health_centre": "doctor, hospital, medical camp, ambulance", "vet_camp": "veterinary camp, animal doctor",
-          "parking": "where to park vehicles", "ghat": "bathing ghats", "near": "nearest facility to the user", "rules": "do''s and don''ts, what is allowed",
+          "toilet": "toilets, washrooms, urinals", "parking": "where to park vehicles", "ghat": "bathing ghats", "near": "nearest facility to the user", "rules": "do''s and don''ts, what is allowed",
           "ask": "history or any other general question about the Mela"}',
         -- registry keywords send text straight to this service (no LLM call); the
         -- service then works out the topic itself (n8n/src/services/mela.js)
@@ -233,7 +233,7 @@ VALUES ('mela', 'mela', 'सोनपुर मेला', 'Sonpur Mela', 'क�
               'parking', 'park', 'gaadi', 'पार्किंग', 'गाड़ी', 'ghat', 'snan', 'घाट', 'स्नान',
               'program', 'programme', 'singer', 'artist', 'show', 'tonight', 'aaj', 'कार्यक्रम', 'कलाकार', 'आज',
               'helpline', 'control', 'complaint', 'emergency', 'हेल्पलाइन', 'कंट्रोल', 'शिकायत',
-              'lost', 'khoya', 'खोया', 'toilet', 'शौचालय', 'hotel', 'होटल', 'near', 'nearest', 'nearby', 'नज़दीकी', 'pin'],
+              'lost', 'khoya', 'खोया', 'toilet', 'toilets', 'washroom', 'bathroom', 'urinal', 'shauchalay', 'शौचालय', 'टॉयलेट', 'बाथरूम', 'hotel', 'होटल', 'near', 'nearest', 'nearby', 'नज़दीकी', 'pin'],
         true)
 ON CONFLICT (service_key) DO UPDATE SET
     id_prefix = EXCLUDED.id_prefix, title_hi = EXCLUDED.title_hi, title_en = EXCLUDED.title_en,

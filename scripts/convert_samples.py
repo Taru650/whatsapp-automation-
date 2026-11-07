@@ -200,7 +200,7 @@ README_ROWS = [
 ]
 PHONE_COLS = {"s1_phone", "s2_phone", "s3_phone", "allday_phone", "phone_2", "value"}
 DROPDOWNS = {
-    "category": '"thana,health_centre,vet_camp,parking,ghat,accommodation,toilet_water,lost_found,help_desk"',
+    "category": '"thana,health_centre,vet_camp,toilet,parking,ghat,accommodation,toilet_water,lost_found,help_desk"',
     "desk": '"Magistrate,Police,Sanitation & Water,Electricity,Health,Other"',
     "kind": '"do,dont,emergency"',
     "active": '"TRUE,FALSE"', "verified": '"TRUE,FALSE"', "is_highlight": '"TRUE,FALSE"',

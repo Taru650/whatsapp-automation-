@@ -209,6 +209,7 @@ FROM (VALUES
     ('water_supply',       'Water supply',                     'पानी की समस्या',                  'phed',            3, 10),
     ('electricity',        'Electricity',                      'बिजली की समस्या',                 'electricity',     2, 20),
     ('sanitation',         'Sanitation & cleanliness',         'सफ़ाई व्यवस्था',                   'sanitation',      2, 30),
+    ('toilet_cleaning',    'Toilet cleaning',                  'शौचालय की सफ़ाई',                 'sanitation',      1, 35),
     ('roads',              'Roads & infrastructure',           'सड़क व अवसंरचना',                  'pwd',             5, 40),
     ('police_security',    'Police / security',                'पुलिस / सुरक्षा',                  'police',          1, 50),
     ('medical_health',     'Medical / health',                 'स्वास्थ्य / चिकित्सा',             'health',          1, 60),
