@@ -1,0 +1,76 @@
+<%- include('partials/head') %>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <h1 class="h4 mb-0">WhatsApp usage <span class="text-muted small">(last <%= days %> days)</span></h1>
+  <div class="btn-group btn-group-sm" role="group" aria-label="Period">
+    <% for (const p of periods) { %>
+    <a class="btn <%= p === days ? 'btn-dark' : 'btn-outline-dark' %>" href="<%= base %>/usage?days=<%= p %>"><%= p %> days</a>
+    <% } %>
+  </div>
+</div>
+<p class="small text-muted">Citizens are counted without their phone numbers. Admin numbers and anything before the go-live date are left out.</p>
+<div class="row g-2 mb-3">
+  <div class="col-6 col-md"><div class="card h-100"><div class="card-body py-2"><div class="small text-muted">Citizens</div><div class="fs-3 fw-semibold"><%= totals.citizens || 0 %></div></div></div></div>
+  <div class="col-6 col-md"><div class="card h-100"><div class="card-body py-2"><div class="small text-muted">New citizens</div><div class="fs-3 fw-semibold"><%= newCitizens %></div></div></div></div>
+  <div class="col-6 col-md"><div class="card h-100"><div class="card-body py-2"><div class="small text-muted">Messages</div><div class="fs-3 fw-semibold"><%= totals.messages || 0 %></div></div></div></div>
+  <div class="col-6 col-md"><div class="card h-100"><div class="card-body py-2"><div class="small text-muted">Answered</div><div class="fs-3 fw-semibold"><%= totals.answered_pct == null ? '–' : totals.answered_pct + '%' %></div></div></div></div>
+  <div class="col-6 col-md"><div class="card h-100"><div class="card-body py-2"><div class="small text-muted">Complaints filed</div><div class="fs-3 fw-semibold"><%= complaintsFiled %></div></div></div></div>
+</div>
+
+<div class="card mb-3"><div class="card-body">
+  <h2 class="h6">Citizens per day</h2>
+  <div class="chart-box"><canvas id="chart-usage"></canvas></div>
+</div></div>
+
+<div class="row g-3 mb-3">
+  <div class="col-lg-6">
+    <h2 class="h6">Top topics</h2>
+    <% if (!topics.length) { %>
+    <p class="text-muted">No messages in this period yet.</p>
+    <% } else { %>
+    <table class="table table-sm align-middle">
+      <thead><tr><th>What citizens asked for</th><th class="text-end">Messages</th><th class="text-end">Share</th></tr></thead>
+      <tbody>
+        <% for (const t of topics) { %>
+        <tr><td><%= t.label %> <span class="badge text-bg-light"><%= t.service === 'mela' ? 'Mela' : t.service === 'complaint' ? 'Complaint' : 'General' %></span></td>
+            <td class="text-end"><%= t.messages %></td>
+            <td class="text-end"><%= topicTotal ? Math.round(100 * t.messages / topicTotal) : 0 %>%</td></tr>
+        <% } %>
+      </tbody>
+    </table>
+    <% } %>
+  </div>
+  <div class="col-lg-6">
+    <h2 class="h6">Questions the bot could not answer</h2>
+    <% if (!unanswered.length) { %>
+    <p class="text-muted">None in this period.</p>
+    <% } else { %>
+    <table class="table table-sm align-middle">
+      <thead><tr><th>Example (numbers hidden)</th><th class="text-end">Times</th><th class="text-end">Last</th></tr></thead>
+      <tbody>
+        <% for (const q of unanswered) { %>
+        <tr><td class="text-break"><%= q.example || q.theme %></td><td class="text-end"><%= q.times %></td><td class="text-end text-nowrap"><%= fmtDay(q.last_day) %></td></tr>
+        <% } %>
+      </tbody>
+    </table>
+    <p class="small text-muted">Add the missing information to the Mela sheet, or ask for a new keyword, when a question keeps coming back.</p>
+    <% } %>
+  </div>
+</div>
+
+<h2 class="h6">Day by day</h2>
+<div class="table-responsive">
+<table class="table table-sm align-middle">
+  <thead><tr><th>Day</th><th class="text-end">Citizens</th><th class="text-end">New</th><th class="text-end">Messages</th><th class="text-end">Answered</th><th class="text-end">Unanswered</th><th class="text-end">👍</th><th class="text-end">👎</th></tr></thead>
+  <tbody>
+    <% for (const d of daily) { %>
+    <tr><td class="text-nowrap"><%= fmtDay(d.day) %></td><td class="text-end"><%= d.citizens %></td><td class="text-end"><%= d.new_citizens %></td>
+        <td class="text-end"><%= d.messages %></td><td class="text-end"><%= d.answered_pct == null ? '–' : d.answered_pct + '%' %></td>
+        <td class="text-end"><%= d.unanswered %></td><td class="text-end"><%= d.thumbs_up %></td><td class="text-end"><%= d.thumbs_down %></td></tr>
+    <% } %>
+  </tbody>
+</table>
+</div>
+<script type="application/json" id="usage-data"><%- JSON.stringify(chart).replace(/</g, '\\u003c') %></script>
+<script src="<%= base %>/static/chart/chart.umd.min.js"></script>
+<script src="<%= base %>/static/usage.js"></script>
+<%- include('partials/foot') %>
