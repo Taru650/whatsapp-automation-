@@ -3,9 +3,11 @@ BEGIN;
 DO $$
 DECLARE admin_id bigint; head_id bigint; officer_id bigint; d double precision; failed boolean;
 BEGIN
-    -- seed data: 11 categories including the animal-fair veterinary category
+    -- seed data: 12 categories including the animal-fair veterinary category and toilet cleaning
     ASSERT (SELECT count(*) FROM grievance.departments) >= 11, 'departments seeded';
-    ASSERT (SELECT count(*) FROM grievance.complaint_categories) = 11, 'all 11 categories seeded';
+    ASSERT (SELECT count(*) FROM grievance.complaint_categories) = 12, 'all 12 categories seeded';
+    ASSERT (SELECT d.dept_key FROM grievance.complaint_categories c JOIN grievance.departments d USING (department_id)
+            WHERE c.category_key = 'toilet_cleaning') = 'sanitation', 'toilet cleaning goes to municipal sanitation';
     ASSERT EXISTS (SELECT 1 FROM grievance.complaint_categories WHERE category_key = 'veterinary_animal'),
         'veterinary/animal category present (Mela is an animal fair)';
     ASSERT NOT EXISTS (SELECT 1 FROM grievance.complaint_categories c

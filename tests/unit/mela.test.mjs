@@ -279,3 +279,57 @@ test('empty data never crashes and never dead-ends', () => {
   assert.ok(ok(melaHandle(req({ kind: 'location', lat: 25.69, lon: 85.17 }), empty)).messages.length);
   assert.ok(haversineM(25.69, 85.17, 25.69, 85.17) === 0);
 });
+
+// --- toilets -------------------------------------------------------------------------
+function withToilets(cat = 'toilet') {
+  const tabs = cleanTabs();
+  const cols = tabs.places[0];
+  const row = (id, name, lat, lon) => { const r = cols.map(() => ''); r[cols.indexOf('id')] = id; r[cols.indexOf('category')] = cat;
+    r[cols.indexOf('name_en')] = name; r[cols.indexOf('name_hi')] = name + ' शौचालय'; r[cols.indexOf('lat')] = lat; r[cols.indexOf('lon')] = lon;
+    r[cols.indexOf('active')] = 'yes'; r[cols.indexOf('verified')] = 'yes'; return r; };
+  tabs.places.push(row('TL01', 'Gate 1 toilet block', '25.6930', '85.1700'), row('TL02', 'Kali Ghat toilets', '25.6827', '85.1907'),
+    row('TL03', 'Cattle market toilets', '25.6983', '85.1661'), row('TL04', 'Main pandal toilets', '25.6950', '85.1786'));
+  return snapshot(tabs);
+}
+
+test('toilets: own menu row after vet camps, in Near me, and listed with walking directions', () => {
+  const snap = { ...withToilets(), qa_enabled: false };
+  const menu = ok(melaHandle(req({ kind: 'open', id: 'mela:open' }), snap));
+  const ids = menu.messages[0].sections[0].rows.map((r) => r.id);
+  assert.equal(ids[ids.indexOf('mela:cat:vet_camp') + 1], 'mela:cat:toilet', ids.join());
+  assert.match(JSON.stringify(menu), /🚻 Toilets/);
+  const hi = ok(melaHandle(req({ kind: 'open', id: 'mela:open' }, { lang: 'hi' }), snap));
+  assert.match(JSON.stringify(hi), /🚻 शौचालय/);
+  const near = ok(melaHandle(req({ kind: 'list', id: 'mela:near' }), snap));
+  assert.ok(near.messages[0].sections[0].rows.some((r) => r.id === 'mela:near:toilet'), 'Near me offers toilets');
+  const list = ok(melaHandle(req({ kind: 'text', text: 'toilet kahan hai' }), snap));
+  const text = list.messages.map((m) => m.body || '').join('\n');
+  assert.match(text, /Gate 1 toilet block/);
+  assert.match(text, /🧭 https:\/\/www\.google\.com\/maps\/dir\/\?api=1&destination=25\.693,85\.17&travelmode=walking/);
+  const hiText = ok(melaHandle(req({ kind: 'text', text: 'शौचालय कहाँ है' }, { lang: 'hi' }), snap));
+  assert.match(hiText.messages.map((m) => m.body || '').join('\n'), /शौचालय/);
+});
+
+test('toilets: "nearest toilet" asks for the location, then gives the 3 nearest with a map pin', () => {
+  const snap = withToilets();
+  const ask = ok(melaHandle(req({ kind: 'text', text: 'nearest toilet' }), snap));
+  assert.equal(ask.messages[0].type, 'location_request');
+  assert.deepEqual(ask.context, { near_cat: 'toilet' });
+  const res = ok(melaHandle(req({ kind: 'location', lat: 25.6931, lon: 85.1702 }, { state: 'mela.await_location', context: { near_cat: 'toilet' } }), snap));
+  const body = res.messages[0].body;
+  assert.match(body, /Nearest toilet/);
+  assert.ok(body.indexOf('Gate 1 toilet block') < body.indexOf('Main pandal toilets'), 'closest first');
+  assert.equal((body.match(/🧭 https:/g) || []).length, 3, 'three nearest, each with a directions link');
+  const pin = res.messages.find((m) => m.type === 'location');
+  assert.equal(pin.name, 'Gate 1 toilet block');
+  assert.equal(res.log.subtype, 'near_toilet');
+  // a location shared without asking first: nearest thana, health centre and toilet
+  const any = ok(melaHandle(req({ kind: 'location', lat: 25.6931, lon: 85.1702 }), withToilets()));
+  assert.match(any.messages[0].body, /Nearest toilet/);
+});
+
+test('toilets: a sheet that still uses the older toilet_water category is found by a toilet question', () => {
+  const snap = withToilets('toilet_water');
+  const list = ok(melaHandle(req({ kind: 'text', text: 'washroom' }), snap));
+  assert.match(list.messages.map((m) => m.body || '').join('\n'), /Gate 1 toilet block/);
+});

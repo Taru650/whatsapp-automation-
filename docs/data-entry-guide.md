@@ -13,7 +13,7 @@ number is wrong in the sheet, it is wrong on WhatsApp.
 ## 2. Tabs / टैब
 | Tab | One row = / एक पंक्ति = |
 |---|---|
-| `places` | one thana / health centre / vet camp / parking / ghat (the `category` column says which) · एक थाना / स्वास्थ्य केंद्र / पशु शिविर / पार्किंग / घाट |
+| `places` | one thana / health centre / vet camp / toilet / parking / ghat (the `category` column says which: `thana`, `health_centre`, `vet_camp`, `toilet`, `parking`, `ghat`) · एक थाना / स्वास्थ्य केंद्र / पशु शिविर / शौचालय / पार्किंग / घाट |
 | `control_room` | one desk: Magistrate, Police, Sanitation & Water, Electricity, Health · एक डेस्क |
 | `events` | one programme item (a day can have several) · एक कार्यक्रम |
 | `guidelines` | one do / don't / emergency instruction (optional) · एक निर्देश |

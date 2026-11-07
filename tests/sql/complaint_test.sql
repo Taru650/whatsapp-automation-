@@ -31,7 +31,7 @@ BEGIN
 
     -- snapshot(): categories for the menu, the citizen's own complaints, and the geofence setting
     s := svc_complaint.snapshot('wa-abc');
-    ASSERT jsonb_array_length(s->'categories') = 11, 'snapshot lists all 11 categories';
+    ASSERT jsonb_array_length(s->'categories') = 12, 'snapshot lists all 12 categories';
     ASSERT jsonb_array_length(s->'my_complaints') >= 1, 'snapshot includes this citizen''s complaint';
     ASSERT NOT EXISTS (
         SELECT 1 FROM jsonb_array_elements(svc_complaint.snapshot('someone-else-entirely')->'my_complaints') x

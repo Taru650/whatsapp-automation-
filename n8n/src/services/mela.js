@@ -7,7 +7,7 @@
 //   qa_request: { question }  -> the workflow asks the LLM, then calls melaQaFinish()
 // Every fact and phone number comes from `snap`; nothing is invented here.
 
-const MELA_CATEGORY_ORDER = ['thana', 'health_centre', 'vet_camp', 'parking', 'ghat', 'accommodation',
+const MELA_CATEGORY_ORDER = ['thana', 'health_centre', 'vet_camp', 'toilet', 'parking', 'ghat', 'accommodation',
   'toilet_water', 'lost_found', 'help_desk'];
 const MELA_LABELS = {
   thana: { en: 'Police stations', hi: 'पुलिस थाना', one: { en: 'police station', hi: 'पुलिस थाना' }, icon: '👮' },
@@ -16,7 +16,8 @@ const MELA_LABELS = {
   parking: { en: 'Parking', hi: 'पार्किंग', one: { en: 'parking', hi: 'पार्किंग' }, icon: '🅿️' },
   ghat: { en: 'Ghats', hi: 'घाट', one: { en: 'ghat', hi: 'घाट' }, icon: '🌊' },
   accommodation: { en: 'Accommodation', hi: 'ठहरने की जगह', one: { en: 'accommodation', hi: 'ठहरने की जगह' }, icon: '🏨' },
-  toilet_water: { en: 'Toilets & water', hi: 'शौचालय व पानी', one: { en: 'toilet / water point', hi: 'शौचालय / पानी' }, icon: '🚻' },
+  toilet: { en: 'Toilets', hi: 'शौचालय', one: { en: 'toilet', hi: 'शौचालय' }, icon: '🚻' },
+  toilet_water: { en: 'Toilets & water', hi: 'शौचालय व पानी', one: { en: 'toilet / water point', hi: 'शौचालय / पानी' }, icon: '🚰' },
   lost_found: { en: 'Lost & found', hi: 'खोया-पाया', one: { en: 'lost & found desk', hi: 'खोया-पाया केंद्र' }, icon: '🧒' },
   help_desk: { en: 'Help desks', hi: 'सहायता केंद्र', one: { en: 'help desk', hi: 'सहायता केंद्र' }, icon: 'ℹ️' },
 };
@@ -33,7 +34,8 @@ const MELA_KEYWORDS = [
   ['parking', /\b(parking|park|gaadi|gadi|vehicle|car|bike)\b|पार्किंग|गाड़ी/],
   ['ghat', /\b(ghat|snan|nahana|nahane|ganga|gandak)\b|घाट|स्नान|नहान/],
   ['accommodation', /\b(hotel|stay|dharamshala|lodge|accommodation|thaharna|rukna)\b|होटल|धर्मशाला|ठहर|रुकन/],
-  ['toilet_water', /\b(toilet|washroom|bathroom|urinal|water|pani|paani)\b|शौचालय|पानी/],
+  ['toilet', /\b(toilet|toilets|washroom|bathroom|urinal|latrine|loo|shauchalay|shauchalaya|sauchalay|peshab|pakhana)\b|शौचालय|पेशाब|पाखाना|बाथरूम|टॉयलेट/],
+  ['toilet_water', /\b(water|pani|paani)\b|पानी/],
   ['today', /\b(today|aaj|aj|tonight|program|programme|schedule|event|show|artist|singer|performance)\b|आज|कार्यक्रम|कलाकार|प्रोग्राम/],
   ['rules', /\b(rule|rules|dos|donts|allowed|banned|mana|niyam)\b|नियम|मना|क्या करें/],
 ];
@@ -218,7 +220,7 @@ function menuRows(lang, snap) {
   const add = (id, en, hi, den, dhi) => rows.push({ id, title: melaT(lang, en, hi), description: melaT(lang, den || '', dhi || '') });
   if ((snap.events || []).length) add('mela:today', "Today's programme", 'आज का कार्यक्रम', 'Cultural programme and artists', 'सांस्कृतिक कार्यक्रम व कलाकार');
   add('mela:control', 'Control room', 'कंट्रोल रूम', 'Helpline and officers on duty now', 'हेल्पलाइन और अभी ड्यूटी पर अधिकारी');
-  if (catsWithCoords(snap).length) add('mela:near', '📍 Near me', '📍 मेरे पास', 'Nearest police, health, vet camp', 'नज़दीकी थाना, अस्पताल, पशु शिविर');
+  if (catsWithCoords(snap).length) add('mela:near', '📍 Near me', '📍 मेरे पास', 'Nearest police, health, toilet, vet camp', 'नज़दीकी थाना, अस्पताल, शौचालय, पशु शिविर');
   for (const c of categoriesPresent(snap)) add(`mela:cat:${c}`, `${catIcon(c)} ${catLabel(snap, c, 'en')}`, `${catIcon(c)} ${catLabel(snap, c, 'hi')}`);
   if ((snap.guidelines || []).length) add('mela:rules', "Do's & don'ts", 'क्या करें, क्या न करें');
   return rows;
@@ -580,7 +582,7 @@ function melaHandle(req, snap) {
 
   // Location shared by a citizen
   if (input.kind === 'location') {
-    const cats = ctx.near_cat ? [ctx.near_cat] : ['thana', 'health_centre'].filter((c) => catsWithCoords(s).includes(c));
+    const cats = ctx.near_cat ? [ctx.near_cat] : ['thana', 'health_centre', 'toilet'].filter((c) => catsWithCoords(s).includes(c));
     if (!cats.length) return melaMenu(r, s, melaT(lang, 'The location service will start soon.', 'लोकेशन सेवा जल्द शुरू होगी।'));
     return nearestScreen(r, s, { lat: input.lat, lon: input.lon }, cats, false);
   }
@@ -602,8 +604,10 @@ function melaHandle(req, snap) {
   const intent = input.intent || {};
   const { near, topic: kwTopic } = detectTopic(text);
   const place = matchPlace(s, text);
-  const topic = kwTopic || (intent.subtype && intent.subtype !== 'ask' ? intent.subtype : null) || (intent.slots && intent.slots.category) || null;
+  let topic = kwTopic || (intent.subtype && intent.subtype !== 'ask' ? intent.subtype : null) || (intent.slots && intent.slots.category) || null;
   const isCat = (t) => t && s.places.some((p) => p.category === t);
+  // older sheets file toilets under toilet_water ("Toilets & water"): a toilet question still finds them
+  if (topic === 'toilet' && !isCat('toilet') && isCat('toilet_water')) topic = 'toilet_water';
   if ((near || topic === 'near') && (isCat(topic) || !topic || topic === 'near')) {
     return isCat(topic) ? askLocation(r, s, topic) : nearChooser(r, s);
   }
