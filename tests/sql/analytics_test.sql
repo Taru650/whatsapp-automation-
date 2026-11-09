@@ -43,7 +43,7 @@ BEGIN
     ASSERT d.unanswered = 1 AND d.thumbs_down = 1 AND d.thumbs_up = 0, 'admin feedback/unanswered excluded';
     ASSERT d.send_errors = 1 AND d.llm_tokens = 1000 AND d.via_llm = 2, 'errors and tokens (admin alert failure not counted)';
     ASSERT d.turn_errors = 0, 'a version conflict (double tap) is not an error';
-    ASSERT d.llm_usd_est = 0.001, format('cost estimate %s', d.llm_usd_est);
+    ASSERT d.llm_usd_est = 0.0002, format('cost estimate %s (1,000 tokens at the Haiku 5.5 rate)', d.llm_usd_est);
     ASSERT (SELECT turns FROM analytics.v_daily WHERE day = '2026-08-02') = 1, '00:10 IST belongs to the next day';
     ASSERT NOT EXISTS (SELECT 1 FROM analytics.v_daily WHERE day = '2026-07-31'), 'before go-live not counted';
 
