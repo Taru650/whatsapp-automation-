@@ -20,7 +20,7 @@ workflows so the change can be ported back into `src`.
 |---|---|---|
 | CoreRouter000001 | core-00-router | Meta webhook (GET verify, POST messages) → turn → service/LLM → send |
 | CoreSend00000001 | core-01-send | Render → phone guard → Graph API (sequential, 1 retry) → log |
-| CoreLlm000000001 | core-02-llm | Free-text classifier, structured output (`claude-haiku-4-5`) |
+| CoreLlm000000001 | core-02-llm | Free-text classifier, structured output (`claude-haiku-5-5`) |
 | CoreAlert0000001 | core-03-admin-alert | `admin_alert` template to every `ADMIN_WA_NUMBERS` |
 | CoreError0000001 | core-08-error | Error Trigger for the router → admin alert |
 | CoreHarness00001 | core-99-test-harness | `POST /webhook/test/service` (published only when `ENV=test`) |

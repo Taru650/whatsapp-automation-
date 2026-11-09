@@ -215,11 +215,17 @@ test('contract: valid output passes, violations reported', () => {
 // --- llm -------------------------------------------------------------------
 test('llm: request shape and response parsing', () => {
   const req = buildClassifierRequest('police near me', [svc('mela', 1, { subtypes: { near: 'nearest facility' } })]);
-  assert.equal(req.model, 'claude-haiku-4-5');
+  assert.equal(req.model, 'claude-haiku-5-5');
   assert.equal(req.output_config.format.type, 'json_schema');
   assert.deepEqual(req.output_config.format.schema.properties.service_key.enum, ['mela', 'none']);
   assert.match(req.system, /subtypes:\n    - near: nearest facility/);
-  const ok = (data, stop = 'end_turn') => ({ stop_reason: stop, usage: { input_tokens: 100, output_tokens: 20 }, content: [{ type: 'text', text: JSON.stringify(data) }] });
+  // Claude Haiku 5.5: no sampling parameters (a 400), low effort, room for thinking
+  for (const k of ['temperature', 'top_p', 'top_k']) assert.ok(!(k in req), `${k} must not be sent`);
+  assert.equal(req.output_config.effort, 'low');
+  assert.ok(req.max_tokens >= 1024);
+  // the answer can follow a thinking block: read by type, not position
+  const ok = (data, stop = 'end_turn') => ({ stop_reason: stop, usage: { input_tokens: 100, output_tokens: 20 },
+    content: [{ type: 'thinking', thinking: '', signature: 's' }, { type: 'text', text: JSON.stringify(data) }] });
   const slots = { place: '', category: 'thana', date: '', block: '', department: '' };
   const r = parseClassifierResponse(ok({ service_key: 'mela', subtype: 'near', slots, lang: 'en', confidence: 0.9 }), [svc('mela')]);
   assert.equal(r.ok, true); assert.equal(r.tokens, 120); assert.deepEqual(r.slots, { category: 'thana' });

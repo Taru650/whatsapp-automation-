@@ -8,8 +8,10 @@ Scheme Eligibility plug in later without rebuilding the bot.
 
 **AI is off at launch** (`LLM_ENABLED=false`): menus and keywords answer
 everything. Switching it on (`LLM_ENABLED=true` + `ANTHROPIC_API_KEY`) lets
-**Claude Haiku 4.5** understand free text that matches no keyword; it never
-states facts.
+**Claude Haiku 5.5** (`claude-haiku-5-5`) understand free text that matches no
+keyword and answer Mela questions from the approved text in the sheet's
+`guidelines` tab; it never states facts of its own. Citizens' typed text is then
+processed by Anthropic outside India.
 
 - Plan: [`docs/implementation-plan.md`](docs/implementation-plan.md)
   ([PDF](docs/Saran-Citizen-WhatsApp-Bot-Plan.pdf))

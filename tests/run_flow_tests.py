@@ -399,7 +399,7 @@ def llm_routes_free_text_and_misses_gracefully():
     out = wait_out(u, 3)
     assert body_of(out[1]) == "You said: please repeat after me", [summary(c) for c in out]
     req = json.loads(http("GET", f"{CLAUDE}/__captured")[1])[-1]
-    assert req["body"]["model"] == "claude-haiku-4-5" and req["headers"]["anthropic-version"] == "2023-06-01"
+    assert req["body"]["model"] == "claude-haiku-5-5" and req["headers"]["anthropic-version"] == "2023-06-01"
     assert scalar(f"select via from core.message_log where wa_hash='{hash_of(u)}' and direction='in' order by id desc limit 1") == "llm"
     v = user()
     send(v, m_text(v, "what is the meaning of life"))
