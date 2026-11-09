@@ -64,6 +64,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, {"type": "error", "error": {"type": "api_error", "message": "mock failure"}})
         if req.get("output_config", {}).get("format", {}).get("type") != "json_schema":
             return self._send(400, {"type": "error", "error": {"type": "invalid_request_error", "message": "expected json_schema"}})
+        # Claude Haiku 5.5 rejects non-default sampling parameters (temperature 0 included)
+        if any(k in req for k in ("temperature", "top_p", "top_k")):
+            return self._send(400, {"type": "error", "error": {"type": "invalid_request_error", "message": "sampling parameters are not supported for this model"}})
         schema = req["output_config"]["format"].get("schema", {})
         if "answerable" in schema.get("properties", {}):  # Mela Q&A over the approved text
             known = "unknownq" not in text.lower()
@@ -72,7 +75,8 @@ class Handler(BaseHTTPRequestHandler):
             out = classify(text)
         self._send(200, {
             "id": "msg_mock", "type": "message", "role": "assistant", "model": req.get("model"),
-            "content": [{"type": "text", "text": json.dumps(out)}],
+            # Haiku 5.5 thinks by default: the answer can follow an (empty, omitted) thinking block
+            "content": [{"type": "thinking", "thinking": "", "signature": "mock"}, {"type": "text", "text": json.dumps(out)}],
             "stop_reason": "end_turn", "usage": {"input_tokens": 420, "output_tokens": 38},
         })
 

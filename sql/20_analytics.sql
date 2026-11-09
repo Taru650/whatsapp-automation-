@@ -16,13 +16,16 @@ CREATE SCHEMA IF NOT EXISTS analytics;
 INSERT INTO core.settings (key, value) VALUES
     ('analytics_since', '2000-01-01'),   -- set to the go-live date at cut-over
     ('retention_days', '180'),           -- plan §9: personal data kept 180 days
-    -- Claude Haiku 4.5 is $1 / MTok input and $5 / MTok output. The bot's calls
-    -- are ~92% input tokens (prompt + context, short JSON answer), so the
-    -- blended rate is ≈ $1.35 / MTok. Only an estimate: check the Anthropic
-    -- console for the real bill.
-    ('llm_usd_per_mtok', '1.35'),
+    -- Claude Haiku 5.5 is $0.10 / MTok input and $0.50 / MTok output (prompts up
+    -- to 100K tokens). The bot's calls are mostly input (prompt + context, short
+    -- JSON answer, a little thinking), so the blended rate is ≈ $0.16 / MTok.
+    -- Only an estimate: check the Anthropic console for the real bill.
+    ('llm_usd_per_mtok', '0.16'),
     ('usd_inr', '84')
 ON CONFLICT (key) DO NOTHING;
+-- Databases seeded with the Claude Haiku 4.5 rate move to the Haiku 5.5 one
+-- (a rate an operator set by hand is left alone).
+UPDATE core.settings SET value = '0.16' WHERE key = 'llm_usd_per_mtok' AND value = '1.35';
 
 -- Indexes for the dashboard/report queries at Mela scale (millions of rows).
 CREATE INDEX IF NOT EXISTS message_log_out_err_idx ON core.message_log (ts)
@@ -175,7 +178,7 @@ SELECT t.day, t.citizens, coalesce(n.new_citizens, 0) AS new_citizens, t.turns,
        t.turn_errors, coalesce(e.send_errors, 0)            AS send_errors,
        round(t.p50_ms::numeric) AS p50_ms, round(t.p95_ms::numeric) AS p95_ms,
        t.llm_tokens,
-       round(t.llm_tokens / 1e6 * analytics.setting('llm_usd_per_mtok', '1.35')::numeric, 3) AS llm_usd_est
+       round(t.llm_tokens / 1e6 * analytics.setting('llm_usd_per_mtok', '0.16')::numeric, 4) AS llm_usd_est
 FROM t
 LEFT JOIN n USING (day) LEFT JOIN f USING (day) LEFT JOIN u USING (day) LEFT JOIN e USING (day);
 

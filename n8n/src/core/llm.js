@@ -1,7 +1,14 @@
-// Free-text intent classifier (Claude Haiku 4.5 via the Messages API with
+// Free-text intent classifier (Claude Haiku 5.5 via the Messages API with
 // structured outputs). The LLM only picks a route; it never produces facts,
 // numbers or eligibility verdicts that reach the citizen.
-const DEFAULT_MODEL = 'claude-haiku-4-5';
+//
+// Claude Haiku 5.5: no temperature/top_p/top_k (any non-default value is a 400;
+// the JSON schema keeps the output deterministic in shape), adaptive thinking is
+// on by default and counts toward max_tokens, so effort is low and max_tokens
+// leaves room for a little thinking before the short JSON answer. Responses are
+// read by block type, never by position (a thinking block can come first).
+const DEFAULT_MODEL = 'claude-haiku-5-5';
+const CLASSIFIER_EFFORT = 'low';
 const CONFIDENCE_THRESHOLD = 0.6;
 const SLOT_KEYS = ['place', 'category', 'date', 'block', 'department'];
 
@@ -44,11 +51,10 @@ function classifierSchema(services) {
 function buildClassifierRequest(text, services, model) {
   return {
     model: model || DEFAULT_MODEL,
-    max_tokens: 300,
-    temperature: 0,
+    max_tokens: 1024,
     system: classifierSystemPrompt(services),
     messages: [{ role: 'user', content: String(text).slice(0, 1000) }],
-    output_config: { format: { type: 'json_schema', schema: classifierSchema(services) } },
+    output_config: { effort: CLASSIFIER_EFFORT, format: { type: 'json_schema', schema: classifierSchema(services) } },
   };
 }
 

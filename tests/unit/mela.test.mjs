@@ -273,10 +273,13 @@ test('admin coordinate capture: pin -> category -> site -> location -> confirm -
 test('Q&A request and answer handling', () => {
   const s = snapshot();
   const r = melaQaRequest('history?', 'Sonpur Mela is held at Harihar Kshetra.', s);
-  assert.equal(r.model, 'claude-haiku-4-5');
+  assert.equal(r.model, 'claude-haiku-5-5');
   assert.match(r.system, /Harihar Kshetra/);
   assert.deepEqual(r.output_config.format.schema.required, ['answerable', 'answer']);
-  const resp = (d) => ({ stop_reason: 'end_turn', usage: { input_tokens: 900, output_tokens: 80 }, content: [{ type: 'text', text: JSON.stringify(d) }] });
+  for (const k of ['temperature', 'top_p', 'top_k']) assert.ok(!(k in r), `${k} must not be sent`);
+  assert.equal(r.output_config.effort, 'low'); assert.ok(r.max_tokens >= 2048);
+  const resp = (d) => ({ stop_reason: 'end_turn', usage: { input_tokens: 900, output_tokens: 80 },
+    content: [{ type: 'thinking', thinking: '', signature: 's' }, { type: 'text', text: JSON.stringify(d) }] });
   const good = ok(melaQaFinish(req({}), s, resp({ answerable: true, answer: 'It is at Harihar Kshetra.' })));
   assert.equal(body(good), 'It is at Harihar Kshetra.'); assert.equal(good.log.llm_tokens, 980); assert.equal(good.done, true);
   const bad = ok(melaQaFinish(req({}, { lang: 'hi' }), s, resp({ answerable: false, answer: '' })));

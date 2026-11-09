@@ -629,9 +629,9 @@ function melaHandle(req, snap) {
 function melaQaRequest(question, qaContext, snap, model) {
   const guide = (snap.guidelines || []).map((g) => `- [${g.kind}] ${g.text_en || g.text_hi}`).join('\n');
   return {
-    model: model || 'claude-haiku-4-5',
-    max_tokens: 600,
-    temperature: 0,
+    // Claude Haiku 5.5: no sampling parameters; thinking counts toward max_tokens
+    model: model || 'claude-haiku-5-5',
+    max_tokens: 2048,
     system: [
       'You answer questions from visitors to Sonpur Mela (Saran district, Bihar) on an official district WhatsApp helpline.',
       'Answer ONLY from the reference text below. If the answer is not in it, set answerable to false.',
@@ -642,7 +642,7 @@ function melaQaRequest(question, qaContext, snap, model) {
       '<reference>', String(qaContext || '').slice(0, 20000), guide ? `\nVisitor guidelines:\n${guide}` : '', '</reference>',
     ].join('\n'),
     messages: [{ role: 'user', content: String(question).slice(0, 1000) }],
-    output_config: { format: { type: 'json_schema', schema: {
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: {
       type: 'object',
       properties: { answerable: { type: 'boolean' }, answer: { type: 'string' } },
       required: ['answerable', 'answer'],
