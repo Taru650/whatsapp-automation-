@@ -58,6 +58,22 @@ test('sheet: cleaned sample converts every source row', () => {
   assert.deepEqual(sanitation[0].phones, ['8709898293', '7970663565']);
 });
 
+test('sheet: rows with only the active/verified tick-boxes (or updated_by) filled are blank rows, not errors', () => {
+  const t = cleanTabs();
+  const cols = t.places[0];
+  const ticks = (active, verified, by = '') => cols.map((c) => (c === 'active' ? active : c === 'verified' ? verified : c === 'updated_by' ? by : ''));
+  // a gap mid-table and a run of unticked rows at the end, as the real sheet had (9 Nov 2026)
+  t.places.splice(5, 0, ticks('TRUE', 'TRUE'), ticks('TRUE', 'TRUE', 'Ramesh'));
+  t.places.push(ticks('FALSE', ''), ticks('FALSE', 'FALSE'));
+  const r = validateMelaSheet(t, { requireVerified: true });
+  assert.deepEqual(r.errors, []);
+  assert.equal(r.data.places.length, validateMelaSheet(cleanTabs(), { requireVerified: true }).data.places.length);
+  // a row with real content and no id is still an error
+  const bad = cleanTabs();
+  bad.places.push(cols.map((c) => (c === 'name_en' ? 'New toilet' : c === 'category' ? 'toilet' : '')));
+  assert.ok(validateMelaSheet(bad, {}).errors.some((e) => /id is empty/.test(e.msg)));
+});
+
 test('sheet: rules - Kruti Dev, landline, verified, placeholders, missing tab, bad coords', () => {
   const t = cleanTabs();
   const c = t.places[0];

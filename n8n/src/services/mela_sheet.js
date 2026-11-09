@@ -81,12 +81,16 @@ function normTime(raw) {
   return null;
 }
 
+// Bookkeeping columns: Google Sheets fills a checkbox column down the whole
+// tab (TRUE/FALSE), so a row with nothing but these is still an empty row.
+const BOOKKEEPING = new Set(['active', 'verified', 'updated_by']);
+
 function rowsOf(values) {
   const [header = [], ...body] = values || [];
   const cols = header.map((h) => cell(h).toLowerCase());
   const rows = [];
   body.forEach((r, i) => {
-    if (!r || r.every((v) => cell(v) === '')) return;
+    if (!r || r.every((v, j) => cell(v) === '' || BOOKKEEPING.has(cols[j]))) return;
     const o = { __row: i + 2 };
     cols.forEach((c, j) => { if (c) o[c] = cell(r[j]); });
     rows.push(o);
