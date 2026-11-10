@@ -65,6 +65,9 @@ With no data, screens still work but say "no places/events found".
      in-charge and phone for right now
    - type **"police near me"** → expect a location request, then (after you
      share your location) the nearest thanas with a walking-directions link
+   - tap **📍 Near me** → expect a location request straight away (no
+     category question), then the nearest **one of every service** (police,
+     health, vet, toilet, parking, ghat…) with a walking link each
    - tap **❓ Ask a question** → type a Mela question in plain text → expect
      an answer from the approved text, or the helpline (never a guess)
    - send a voice note → expect the "only typed messages" reply
