@@ -44,8 +44,12 @@ for db in ${BACKUP_DBS:-citizen_bot n8n}; do
   echo "restored $DIR/$db-$STAMP.dump.enc -> $target"
 done
 if [[ -f "$WORK/complaint-media.tar" && -z "$SUFFIX" ]]; then
-  docker compose exec -T n8n sh -c 'rm -rf /data/complaint-media/* /data/complaint-media/.[!.]* 2>/dev/null; mkdir -p /data/complaint-media'
-  docker compose exec -T n8n tar -C /data/complaint-media -xf - < "$WORK/complaint-media.tar"
+  # Through the one-shot media-init container (root, the volume mounted), not
+  # n8n: on a fresh server n8n is not running yet. Files end up owned by the
+  # n8n/portal user (1000), as media-init leaves the volume.
+  docker compose run --rm --no-deps -T --entrypoint sh media-init -c \
+    'rm -rf /data/complaint-media/* /data/complaint-media/.[!.]* 2>/dev/null; tar -C /data/complaint-media -xf - && chown -R 1000:1000 /data/complaint-media' \
+    < "$WORK/complaint-media.tar"
   echo "restored $media_file -> complaint_media volume"
 fi
 echo "Done. For a real restore: docker compose run --rm import && docker compose up -d"
