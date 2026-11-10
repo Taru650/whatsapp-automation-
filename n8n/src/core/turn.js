@@ -49,6 +49,9 @@ function buildEnv(item, turn, flags) {
     core_ctx: core,
     first_contact: !!turn.first_contact,
     feedback_asked_today: !!turn.feedback_asked_today,
+    // "Was this helpful?" is an extra WhatsApp message (Meta charges per message):
+    // off unless core.settings feedback_enabled = 'true'.
+    feedback_enabled: String((turn.settings || {}).feedback_enabled) === 'true',
     is_admin: !!turn.is_admin,
     // service whose own menu is the main menu ("hi" opens it directly; it lists
     // the other services as rows). core.settings home_service; '' = off.
@@ -210,7 +213,7 @@ function finalizeTurn(decision, result) {
   // "Was this helpful?" at most once per citizen per day (not once per
   // conversation: a new conversation starts after 30 minutes of silence).
   let feedbackAsked = false;
-  if (r.done && serviceKey && !coreCtx.fb_asked && !env.feedback_asked_today) {
+  if (env.feedback_enabled && r.done && serviceKey && !coreCtx.fb_asked && !env.feedback_asked_today) {
     messages.push(feedbackPrompt(env, serviceKey));
     coreCtx.fb_asked = true;
     feedbackAsked = true;

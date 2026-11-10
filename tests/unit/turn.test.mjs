@@ -14,7 +14,7 @@ const echo = { service_key: 'echo', id_prefix: 'echo', title_en: 'Echo', title_h
 const other = { ...echo, service_key: 'dir', id_prefix: 'dir', title_en: 'Dir', menu_order: 2, workflow_id: 'W2' };
 const item = (input) => ({ wa_id: '919000000001', msg_id: 'wamid.X', input: { id: null, text: null, lat: null, lon: null, ...input } });
 const turn = (over = {}) => ({ is_dup: false, wa_hash: 'h', version: 3, lang: 'en', state: null, context: {}, first_contact: false,
-  is_admin: false, rate_limited: false, rate_notice: false, services: [echo], templates: TEMPLATES, settings: { llm_enabled: 'true' }, ...over });
+  is_admin: false, rate_limited: false, rate_notice: false, services: [echo], templates: TEMPLATES, settings: { llm_enabled: 'true', feedback_enabled: 'true' }, ...over });
 const flags = { llmEnv: true, nowMs: Date.UTC(2026, 10, 24, 18, 45) }; // 25 Nov 00:15 IST
 
 test('decide: duplicate and rate limit', () => {
@@ -85,7 +85,13 @@ test('finalize: welcome on first contact, feedback once per session, end params'
   assert.equal(rl.end, null);
 });
 
-test('feedback: at most once a day, even across conversations', () => {
+test('feedback: off by default (it costs a WhatsApp message), at most once a day when on', () => {
+  const off = (() => {
+    const d = decideTurn(item({ kind: 'button', id: 'echo:again' }), turn({ settings: { llm_enabled: 'true' } }), flags);
+    return finalizeTurn(d, afterService(d, { messages: [{ type: 'text', body: 'ok' }], next_state: null, context: {}, done: true }));
+  })();
+  assert.deepEqual(off.send.messages.map((m) => m.body), ['ok'], 'no setting -> no extra message');
+  assert.equal(off.end.feedback_asked, false);
   const answer = (over) => {
     const d = decideTurn(item({ kind: 'button', id: 'echo:again' }), turn(over), flags);
     return finalizeTurn(d, afterService(d, { messages: [{ type: 'text', body: 'ok' }], next_state: null, context: {}, done: true }));

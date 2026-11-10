@@ -172,6 +172,8 @@ def reset_state():
     sql("update grievance.settings set value = 'false' where key = 'geofence_enabled'")
     enable_only("echo")
     sql("update core.settings set value = 'true' where key = 'llm_enabled'")
+    # most scenarios exercise the (production-off) feedback prompt; one checks it stays off
+    sql("insert into core.settings (key, value) values ('feedback_enabled', 'true') on conflict (key) do update set value = 'true'")
     reset_mocks()
 
 
@@ -331,6 +333,22 @@ def emoji_reaction_gets_no_reply():
     send(u, {"from": u, "id": next_id(), "timestamp": "1", "type": "reaction", "reaction": {"message_id": "wamid.X", "emoji": "👍"}})
     wait_quiet(4)
     assert len(out_to(u)) == 2, [summary(c) for c in out_to(u)]
+
+
+@scenario
+def feedback_question_off_sends_no_extra_message():
+    sql("update core.settings set value = 'false' where key = 'feedback_enabled'")
+    try:
+        u = user()
+        send(u, m_text(u, "hi")); wait_out(u, 2)
+        send(u, m_text(u, "a question"))
+        out = wait_out(u, 3)
+        wait_quiet(2)
+        out = out_to(u)
+        assert len(out) == 3 and body_of(out[2]) == "You said: a question", [summary(c) for c in out]
+        assert scalar(f"select feedback_asked_on is null from core.citizens where wa_hash='{hash_of(u)}'") == "t"
+    finally:
+        sql("update core.settings set value = 'true' where key = 'feedback_enabled'")
 
 
 @scenario

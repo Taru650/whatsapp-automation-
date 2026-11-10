@@ -7,6 +7,11 @@ ON CONFLICT (key) DO NOTHING;
 -- Complaint) are rows in it. Set to '' to go back to the 2-button main menu.
 INSERT INTO core.settings (key, value) VALUES ('home_service', 'mela')
 ON CONFLICT (key) DO NOTHING;
+-- "Was this helpful? 👍/👎" after an answer: off, because it is one more
+-- WhatsApp message and Meta charges per message. 'true' turns it on (asked at
+-- most once per citizen per day).
+INSERT INTO core.settings (key, value) VALUES ('feedback_enabled', 'false')
+ON CONFLICT (key) DO NOTHING;
 
 -- National emergency numbers the bot may always mention.
 SELECT core.register_numbers('static', ARRAY['112', '108', '1098', '1091', '101', '100']);
