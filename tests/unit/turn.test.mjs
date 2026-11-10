@@ -74,8 +74,8 @@ test('finalize: welcome on first contact, feedback once per session, end params'
   const d = decideTurn(item({ kind: 'button', id: 'echo:again' }), turn({ first_contact: true }), flags);
   const res = afterService(d, { messages: [{ type: 'text', body: 'ok' }], next_state: 'echo.wait', context: { a: 1 }, done: true, log: { subtype: 'repeat', resolved: true } });
   const f = finalizeTurn(d, res);
-  assert.deepEqual(f.send.messages.map((m) => m.body), ['welcome_notice_en', 'ok', 'feedback_prompt_en']);
-  assert.deepEqual(f.send.messages[2].buttons.map((b) => b.id), ['fb:up:echo', 'fb:down:echo', 'core:menu']);
+  assert.deepEqual(f.send.messages.map((m) => m.body), ['welcome_notice_en\n\nok', 'feedback_prompt_en'], 'greeting on top of the first reply');
+  assert.deepEqual(f.send.messages[1].buttons.map((b) => b.id), ['fb:up:echo', 'fb:down:echo', 'core:menu']);
   assert.deepEqual(f.end.context, { a: 1, __core: { fb_asked: true } });
   assert.equal(f.end.state, 'echo.wait'); assert.equal(f.end.version, 3); assert.equal(f.end.subtype, 'repeat');
   const d2 = decideTurn(item({ kind: 'button', id: 'echo:again' }), turn({ state: 'echo.wait', context: { a: 1, __core: { fb_asked: true } } }), flags);
@@ -83,6 +83,30 @@ test('finalize: welcome on first contact, feedback once per session, end params'
   assert.deepEqual(f2.send.messages.map((m) => m.body), ['again']);
   const rl = finalizeTurn(decideTurn(item({ kind: 'text', text: 'x' }), turn({ rate_limited: true, rate_notice: true }), flags), null);
   assert.equal(rl.end, null);
+});
+
+test('first contact: one message - the greeting on top of the menu; separate only if it would not fit', () => {
+  const menu = { type: 'list', body: 'Choose', button: 'B', sections: [{ title: 's', rows: [{ id: 'echo:x', title: 'x' }] }] };
+  const run = (over, reply) => {
+    const d = decideTurn(item({ kind: 'text', text: 'hi' }), turn({ first_contact: true, ...over }), flags);
+    return finalizeTurn(d, afterService(d, { messages: [reply], next_state: null, context: {}, done: false })).send.messages;
+  };
+  const one = run({}, menu);
+  assert.equal(one.length, 1); assert.equal(one[0].type, 'list');
+  assert.equal(one[0].body, 'welcome_notice_en\n\nChoose'); assert.deepEqual(one[0].sections, menu.sections);
+  // the Hindi greeting too
+  assert.equal(run({ lang: 'hi' }, menu)[0].body, 'welcome_notice_hi\n\nChoose');
+  // too long for an interactive body (1024): the greeting stays its own message
+  const long = run({}, { ...menu, body: 'x'.repeat(1010) });
+  assert.deepEqual(long.map((m) => m.type), ['text', 'list']); assert.equal(long[1].body.length, 1010);
+  // a message type without a body (a location pin): separate greeting
+  assert.deepEqual(run({}, { type: 'location', lat: 25.7, lon: 85.1, name: 'n', address: 'a' }).map((m) => m.type), ['text', 'location']);
+  // setting off: the old two messages
+  const off = run({ settings: { llm_enabled: 'true', welcome_in_reply: 'false' } }, menu);
+  assert.deepEqual(off.map((m) => m.body), ['welcome_notice_en', 'Choose']);
+  // not first contact: no greeting at all
+  const d = decideTurn(item({ kind: 'text', text: 'hi' }), turn(), flags);
+  assert.deepEqual(finalizeTurn(d, afterService(d, { messages: [menu], next_state: null, context: {}, done: false })).send.messages.map((m) => m.body), ['Choose']);
 });
 
 test('feedback: off by default (it costs a WhatsApp message), at most once a day when on', () => {

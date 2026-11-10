@@ -174,6 +174,9 @@ def reset_state():
     sql("update core.settings set value = 'true' where key = 'llm_enabled'")
     # most scenarios exercise the (production-off) feedback prompt; one checks it stays off
     sql("insert into core.settings (key, value) values ('feedback_enabled', 'true') on conflict (key) do update set value = 'true'")
+    # scenarios count the greeting as its own message; one scenario checks the
+    # production setting (greeting on top of the menu, one message)
+    sql("insert into core.settings (key, value) values ('welcome_in_reply', 'false') on conflict (key) do update set value = 'false'")
     reset_mocks()
 
 
@@ -1021,6 +1024,30 @@ def hi_opens_the_mela_menu_with_file_a_complaint_in_it():
         assert ids_of(out[1]) == ["mela:open", "cmp:open", "lang:hi"], ids_of(out[1])
     finally:
         sql("update core.settings set value = 'mela' where key = 'home_service'")
+
+
+@scenario(services=MELA_AND_COMPLAINT)
+def first_hi_is_one_message_greeting_on_top_of_the_mela_menu():
+    sql("update core.settings set value = 'true' where key = 'welcome_in_reply'")
+    try:
+        for text, word in (("hi", "Namaste"), ("नमस्ते", "नमस्ते")):
+            u = user()
+            send(u, m_text(u, text))
+            out = wait_out(u, 1)
+            wait_quiet(2)
+            out = out_to(u)
+            assert len(out) == 1, [summary(c) for c in out]
+            body = body_of(out[0])
+            assert out[0]["payload"]["interactive"]["type"] == "list", summary(out[0])
+            assert body.startswith("🙏") and word in body and ("Sonpur Mela" in body or "सोनपुर मेला" in body), body
+            assert len(body) <= 1024, len(body)
+            assert ids_of(out[0])[-1] == "core:open:cmp", ids_of(out[0])
+            # the second "hi" is just the menu
+            send(u, m_text(u, text))
+            out = wait_out(u, 2)
+            assert not body_of(out[1]).startswith("🙏"), body_of(out[1])
+    finally:
+        sql("update core.settings set value = 'false' where key = 'welcome_in_reply'")
 
 
 @scenario(services=COMPLAINT_ONLY)

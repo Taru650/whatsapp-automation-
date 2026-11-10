@@ -12,6 +12,10 @@ ON CONFLICT (key) DO NOTHING;
 -- most once per citizen per day).
 INSERT INTO core.settings (key, value) VALUES ('feedback_enabled', 'false')
 ON CONFLICT (key) DO NOTHING;
+-- The first-contact greeting sits on top of the first reply (the menu): one
+-- message per new citizen instead of two. 'false' sends it as its own message.
+INSERT INTO core.settings (key, value) VALUES ('welcome_in_reply', 'true')
+ON CONFLICT (key) DO NOTHING;
 
 -- National emergency numbers the bot may always mention.
 SELECT core.register_numbers('static', ARRAY['112', '108', '1098', '1091', '101', '100']);

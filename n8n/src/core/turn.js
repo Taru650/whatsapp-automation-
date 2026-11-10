@@ -18,6 +18,9 @@ const _buildMainMenu = (a, b, c) => (_turnDeps ? _turnDeps.buildMainMenu(a, b, c
 const _tpl = (a, b, c) => (_turnDeps ? _turnDeps.tpl(a, b, c) : tpl(a, b, c));
 const _validate = (a, b) => (_turnDeps ? _turnDeps.validateServiceOutput(a, b) : validateServiceOutput(a, b));
 
+// Message types whose `body` can carry the first-contact greeting on top.
+const WELCOME_CARRIERS = new Set(['text', 'buttons', 'list', 'location_request']);
+
 function istNow(date) {
   const d = date || new Date();
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -52,6 +55,8 @@ function buildEnv(item, turn, flags) {
     // "Was this helpful?" is an extra WhatsApp message (Meta charges per message):
     // off unless core.settings feedback_enabled = 'true'.
     feedback_enabled: String((turn.settings || {}).feedback_enabled) === 'true',
+    // greeting merged into the first reply (one message); 'false' = separate message
+    welcome_in_reply: String((turn.settings || {}).welcome_in_reply) !== 'false',
     is_admin: !!turn.is_admin,
     // service whose own menu is the main menu ("hi" opens it directly; it lists
     // the other services as rows). core.settings home_service; '' = off.
@@ -208,8 +213,22 @@ function finalizeTurn(decision, result) {
   const r = result || { messages: decision.messages || [], next_state: decision.state, context: decision.context || {}, done: !!decision.done, log: {} };
   const coreCtx = { ...env.core_ctx };
   const messages = [];
-  if (env.first_contact) messages.push({ type: 'text', body: t(env, 'welcome_notice') });
-  messages.push(...(decision.pre || []), ...(r.messages || []));
+  const reply = [...(decision.pre || []), ...(r.messages || [])];
+  if (env.first_contact) {
+    // The greeting goes on top of the first reply (usually the menu): one
+    // WhatsApp message instead of two (Meta charges per message). A separate
+    // message only when the two would not fit WhatsApp's limit.
+    const welcome = t(env, 'welcome_notice');
+    const first = reply[0];
+    const limit = first && (first.type === 'text' ? 4096 : 1024);
+    if (env.welcome_in_reply && first && WELCOME_CARRIERS.has(first.type) && typeof first.body === 'string'
+        && welcome.length + 2 + first.body.length <= limit) {
+      reply[0] = { ...first, body: `${welcome}\n\n${first.body}` };
+    } else {
+      messages.push({ type: 'text', body: welcome });
+    }
+  }
+  messages.push(...reply);
   // "Was this helpful?" at most once per citizen per day (not once per
   // conversation: a new conversation starts after 30 minutes of silence).
   let feedbackAsked = false;
