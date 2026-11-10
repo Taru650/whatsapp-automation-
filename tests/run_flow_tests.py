@@ -305,12 +305,58 @@ def status_callback_does_nothing():
 
 @scenario
 def voice_note_gets_polite_redirect():
+    # outside any step: the apology, then the menu
+    v = user()
+    send(v, m_audio(v))
+    out = wait_out(v, 3)
+    # (no text yet to guess the language from: the Hindi default)
+    assert "लिखे हुए संदेश" in body_of(out[1]) or "typed messages" in body_of(out[1]), summary(out[1])
+    assert ids_of(out[2]) == ["echo:again", "core:menu"], "then the (single) service menu"
+    # in the middle of a step (the echo service waits for text): the step is kept, no menu
     u = user()
     send(u, m_text(u, "hi")); wait_out(u, 2)
     send(u, m_audio(u))
+    out = wait_out(u, 3)
+    wait_quiet(2)
+    out = out_to(u)
+    assert len(out) == 3, [summary(c) for c in out]
+    assert "step above" in body_of(out[2]) or "चरण" in body_of(out[2]), summary(out[2])
+    assert sql(f"select state from core.sessions where wa_hash='{hash_of(u)}'") == [["echo.wait"]]
+
+
+@scenario
+def emoji_reaction_gets_no_reply():
+    u = user()
+    send(u, m_text(u, "hi")); wait_out(u, 2)
+    send(u, {"from": u, "id": next_id(), "timestamp": "1", "type": "reaction", "reaction": {"message_id": "wamid.X", "emoji": "👍"}})
+    wait_quiet(4)
+    assert len(out_to(u)) == 2, [summary(c) for c in out_to(u)]
+
+
+@scenario
+def feedback_question_at_most_once_a_day():
+    u = user()
+    h = hash_of(u)
+    send(u, m_text(u, "hi")); wait_out(u, 2)
+    send(u, m_text(u, "first question"))
     out = wait_out(u, 4)
-    assert "typed messages" in body_of(out[2]), summary(out[2])
-    assert ids_of(out[3]) == ["echo:again", "core:menu"], "then the (single) service menu"
+    assert ids_of(out[3]) == ["fb:up:echo", "fb:down:echo", "core:menu"], summary(out[3])
+    assert scalar(f"select feedback_asked_on = (now() at time zone 'Asia/Kolkata')::date from core.citizens where wa_hash='{h}'") == "t"
+    # a new conversation later the same day (the 30-minute session has expired): not asked again
+    sql(f"update core.sessions set updated_at = now() - interval '1 hour' where wa_hash='{h}'")
+    send(u, m_text(u, "hi")); wait_out(u, 5)
+    send(u, m_text(u, "second question"))
+    out = wait_out(u, 6)
+    wait_quiet(2)
+    out = out_to(u)
+    assert len(out) == 6 and body_of(out[5]) == "You said: second question", [summary(c) for c in out]
+    # the next day it is asked again
+    sql(f"update core.citizens set feedback_asked_on = feedback_asked_on - 1 where wa_hash='{h}'")
+    sql(f"update core.sessions set updated_at = now() - interval '1 hour' where wa_hash='{h}'")
+    send(u, m_text(u, "hi")); wait_out(u, 7)
+    send(u, m_text(u, "third question"))
+    out = wait_out(u, 9)
+    assert ids_of(out[8]) == ["fb:up:echo", "fb:down:echo", "core:menu"], summary(out[8])
 
 
 @scenario
@@ -930,6 +976,50 @@ def complaint_status_check_is_restricted_to_the_citizens_own_number():
     send(other, m_text(other, cid))
     out = wait_out(other, 3)  # welcome + miss message + first feedback ask of this (fresh) session
     assert "couldn't find" in body_of(out[1]), "a citizen must never look up another citizen's complaint by id"
+
+
+@scenario(services=MELA_AND_COMPLAINT)
+def hi_opens_the_mela_menu_with_file_a_complaint_in_it():
+    u = user()
+    send(u, m_text(u, "hi"))
+    out = wait_out(u, 2)
+    assert "Namaste" in body_of(out[0]), summary(out[0])
+    ids = ids_of(out[1])
+    assert "mela:control" in ids and ids[-1] == "core:open:cmp", ids
+    sections = out[1]["payload"]["interactive"]["action"]["sections"]
+    assert len(sections) == 2 and [r["id"] for r in sections[1]["rows"]] == ["core:open:cmp"], sections
+    send(u, m_list(u, "core:open:cmp", "File a Complaint"))
+    out = wait_out(u, 3)
+    assert ids_of(out[2]) == ["cmp:new", "cmp:mine", "core:menu"], summary(out[2])
+    send(u, m_button(u, "core:menu", "Menu"))
+    out = wait_out(u, 4)
+    assert ids_of(out[3])[-1] == "core:open:cmp", "🏠 Menu goes back to the Mela menu"
+    # setting off: the 2-button main menu again
+    sql("update core.settings set value = '' where key = 'home_service'")
+    try:
+        v = user()
+        send(v, m_text(v, "hi"))
+        out = wait_out(v, 2)
+        assert ids_of(out[1]) == ["mela:open", "cmp:open", "lang:hi"], ids_of(out[1])
+    finally:
+        sql("update core.settings set value = 'mela' where key = 'home_service'")
+
+
+@scenario(services=COMPLAINT_ONLY)
+def unreadable_message_mid_complaint_keeps_the_complaint():
+    u = user()
+    for msg, n in ((m_button(u, "cmp:open"), 2), (m_button(u, "cmp:new"), 3), (m_list(u, "cmp:cat:water_supply"), 4),
+                   (m_text(u, "No water since morning"), 5)):
+        send(u, msg)
+        wait_out(u, n)
+    assert scalar(f"select state from core.sessions where wa_hash='{hash_of(u)}'") == "cmp.evidence"
+    send(u, m_audio(u))
+    out = wait_out(u, 6)
+    assert "step above" in body_of(out[5]) or "चरण" in body_of(out[5]), summary(out[5])
+    assert scalar(f"select state from core.sessions where wa_hash='{hash_of(u)}'") == "cmp.evidence", "complaint not dropped"
+    send(u, m_image(u))
+    out = wait_out(u, 7)
+    assert ids_of(out[6]) == ["cmp:evidence:done"], summary(out[6])
 
 
 @scenario(services=MELA_AND_COMPLAINT)

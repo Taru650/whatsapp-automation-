@@ -48,7 +48,11 @@ function buildEnv(item, turn, flags) {
     context: service,
     core_ctx: core,
     first_contact: !!turn.first_contact,
+    feedback_asked_today: !!turn.feedback_asked_today,
     is_admin: !!turn.is_admin,
+    // service whose own menu is the main menu ("hi" opens it directly; it lists
+    // the other services as rows). core.settings home_service; '' = off.
+    home_service: String((turn.settings || {}).home_service || ''),
     services: turn.services || [],
     templates: turn.templates || {},
     llm_enabled: !!(flags && flags.llmEnv) && String((turn.settings || {}).llm_enabled) !== 'false',
@@ -60,14 +64,34 @@ function t(env, key) {
   return _tpl(env.templates, key, env.lang);
 }
 
-// Main menu, or straight into the only service (single-service rule).
+function homeService(env) {
+  return env.home_service ? env.services.find((s) => s.service_key === env.home_service) || null : null;
+}
+
+function openInput(service) {
+  return { kind: 'open', id: `${service.id_prefix}:open`, text: null, lat: null, lon: null };
+}
+
+// Main menu, or straight into the only service (single-service rule), or into
+// the home service's own menu (which lists the other services).
 function menuOrOpen(env, pre, extra) {
   const m = _buildMainMenu(env.services, env.lang, env.templates);
-  if (m.kind === 'open_service') {
-    return { action: 'service', env, service: m.service, pre,
-             input: { kind: 'open', id: `${m.service.id_prefix}:open`, text: null, lat: null, lon: null }, ...extra };
-  }
+  const home = m.kind === 'open_service' ? m.service : homeService(env);
+  if (home) return { action: 'service', env, service: home, pre, input: openInput(home), ...extra };
   return { action: 'reply', env, pre, messages: m.messages, state: null, context: {}, service_key: null, done: false, ...extra };
+}
+
+// Messages the bot can't read (voice, video, sticker...): in the middle of a
+// step (a complaint waiting for its photo) keep that step instead of dropping it
+// for the menu; otherwise apologise and show the menu. Reactions (an emoji on
+// one of our messages) need no reply at all.
+function unsupportedTurn(env) {
+  if (env.input.raw_type === 'reaction') return { action: 'stop', reason: 'reaction' };
+  if (env.state) {
+    return { action: 'reply', env, pre: [], messages: [{ type: 'text', body: t(env, 'unsupported_flow') }],
+             state: env.state, context: env.context, service_key: null, done: false, subtype: 'unsupported' };
+  }
+  return menuOrOpen(env, [{ type: 'text', body: t(env, 'unsupported') }], { subtype: 'unsupported' });
 }
 
 function decideTurn(item, turn, flags) {
@@ -82,7 +106,7 @@ function decideTurn(item, turn, flags) {
   const via = env.input.kind === 'text' ? 'text' : env.input.kind;
   switch (route.action) {
     case 'unsupported':
-      return menuOrOpen(env, [{ type: 'text', body: t(env, 'unsupported') }], { subtype: 'unsupported' });
+      return unsupportedTurn(env);
     case 'lang':
       env.lang = route.lang;
       return menuOrOpen(env, [{ type: 'text', body: t(env, 'lang_switched') }], { set_lang: route.lang });
@@ -93,7 +117,8 @@ function decideTurn(item, turn, flags) {
     case 'not_allowed':
       return menuOrOpen(env, [{ type: 'text', body: t(env, 'not_allowed') }]);
     case 'service':
-      return { action: 'service', env, service: route.service, pre: [], input: env.input, via: route.via || via };
+      return { action: 'service', env, service: route.service, pre: [],
+               input: route.open ? openInput(route.service) : env.input, via: route.via || via };
     case 'llm':
       return { action: 'llm', env };
     case 'menu':
@@ -128,6 +153,14 @@ function serviceInput(decision) {
     now_ist: istNow(new Date(env.received_ms)),
     is_admin: env.is_admin,
     input: decision.input,
+    // The home service shows the other services as rows of its menu
+    // (row id core:open:<id_prefix>); other services get an empty list.
+    other_services: env.home_service === decision.service.service_key
+      ? env.services.filter((s) => s.service_key !== decision.service.service_key)
+        .sort((a, b) => (a.menu_order - b.menu_order) || a.service_key.localeCompare(b.service_key))
+        .map((s) => ({ id: `core:open:${s.id_prefix}`, title_en: s.title_en, title_hi: s.title_hi || s.title_en,
+                       description_en: s.description_en || '', description_hi: s.description_hi || s.description_en || '' }))
+      : [],
   };
 }
 
@@ -174,9 +207,13 @@ function finalizeTurn(decision, result) {
   const messages = [];
   if (env.first_contact) messages.push({ type: 'text', body: t(env, 'welcome_notice') });
   messages.push(...(decision.pre || []), ...(r.messages || []));
-  if (r.done && serviceKey && !coreCtx.fb_asked) {
+  // "Was this helpful?" at most once per citizen per day (not once per
+  // conversation: a new conversation starts after 30 minutes of silence).
+  let feedbackAsked = false;
+  if (r.done && serviceKey && !coreCtx.fb_asked && !env.feedback_asked_today) {
     messages.push(feedbackPrompt(env, serviceKey));
     coreCtx.fb_asked = true;
+    feedbackAsked = true;
   }
   const log = r.log || {};
   return {
@@ -197,6 +234,7 @@ function finalizeTurn(decision, result) {
       latency_ms: Math.max(0, Date.now() - env.received_ms),
       set_lang: decision.set_lang || null,
       feedback_rating: decision.feedback_rating == null ? null : decision.feedback_rating,
+      feedback_asked: feedbackAsked,
       unanswered_reason: decision.unanswered_reason || log.unanswered_reason || null,
       text: env.input.kind === 'text' ? env.input.text : null,
     },

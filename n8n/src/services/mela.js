@@ -229,16 +229,26 @@ function menuRows(lang, snap) {
 // WhatsApp lists hold 10 rows. Main menu: as many rows as fit, then (only when
 // needed) a "More services" row that opens the rest, so no category is ever lost.
 const LIST_MAX = 10;
-function menuSplit(lang, snap) {
+// Other services on this number (e.g. "File a Complaint") when the Mela menu is
+// the bot's main menu: their own section, always on the first screen.
+function otherServiceRows(req) {
+  const lang = req.lang;
+  return (req.other_services || []).slice(0, 3).map((s) => ({
+    id: s.id, title: lang === 'hi' ? s.title_hi : s.title_en, description: lang === 'hi' ? s.description_hi : s.description_en,
+  }));
+}
+
+function menuSplit(lang, snap, reserve = 0) {
   const rows = menuRows(lang, snap);
-  const room = LIST_MAX - (qaOn(snap) ? 1 : 0);
+  const room = LIST_MAX - (qaOn(snap) ? 1 : 0) - reserve;
   if (rows.length <= room) return { main: rows, more: [] };
   return { main: rows.slice(0, room - 1), more: rows.slice(room - 1) };
 }
 
 function melaMenu(req, snap, prefixText) {
   const lang = req.lang;
-  const { main, more } = menuSplit(lang, snap);
+  const others = otherServiceRows(req);
+  const { main, more } = menuSplit(lang, snap, others.length);
   const shown = main.slice();
   if (more.length) shown.push({ id: 'mela:more', title: melaT(lang, '➕ More services', '➕ अन्य सेवाएँ'), description: melaT(lang, more.map((r) => r.title).join(', ').slice(0, 72), more.map((r) => r.title).join(', ').slice(0, 72)) });
   if (qaOn(snap)) shown.push({ id: 'mela:ask', title: melaT(lang, 'Ask a question', 'सवाल पूछें'), description: melaT(lang, 'History, timings, general info', 'इतिहास, समय, सामान्य जानकारी') });
@@ -247,14 +257,15 @@ function melaMenu(req, snap, prefixText) {
     '🎪 *सोनपुर मेला* – आप क्या जानना चाहते हैं?\n(भाषा बदलने के लिए *english* / *हिंदी* लिखें)')].filter(Boolean).join('\n\n');
   return {
     messages: [{ type: 'list', body, button: melaT(lang, 'Choose', 'चुनें'),
-      sections: [{ title: melaT(lang, 'Sonpur Mela', 'सोनपुर मेला'), rows: shown }] }],
+      sections: [{ title: melaT(lang, 'Sonpur Mela', 'सोनपुर मेला'), rows: shown }]
+        .concat(others.length ? [{ title: melaT(lang, 'District services', 'ज़िला सेवाएँ'), rows: others }] : []) }],
     next_state: null, context: {}, done: false, log: { subtype: 'menu', resolved: true },
   };
 }
 
 function moreMenu(req, snap) {
   const lang = req.lang;
-  const { more } = menuSplit(lang, snap);
+  const { more } = menuSplit(lang, snap, otherServiceRows(req).length);
   if (!more.length) return melaMenu(req, snap);
   const rows = more.slice(0, LIST_MAX - 1).concat([{ id: 'mela:open', title: melaT(lang, '🏠 Main menu', '🏠 मुख्य मेनू'), description: '' }]);
   return {

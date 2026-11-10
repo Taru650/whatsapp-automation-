@@ -154,6 +154,35 @@ test('menu: more than 10 rows -> "More services" holds the rest, nothing is drop
   }
 });
 
+test('menu as the main menu: "File a Complaint" in its own section on the first screen, nothing pushed out of reach', () => {
+  const others = [{ id: 'core:open:cmp', title_en: 'File a Complaint', title_hi: 'शिकायत दर्ज करें', description_en: 'Report a problem', description_hi: 'समस्या बताएँ' }];
+  const tabs = cleanTabs();
+  const cols = tabs.places[0];
+  const extra = (id, cat) => { const row = cols.map(() => ''); row[cols.indexOf('id')] = id; row[cols.indexOf('category')] = cat;
+    row[cols.indexOf('name_en')] = id + ' desk'; row[cols.indexOf('name_hi')] = id + ' केंद्र'; row[cols.indexOf('active')] = 'yes'; row[cols.indexOf('verified')] = 'yes'; return row; };
+  for (const crowded of [false, true]) {
+    const t = clone(tabs);
+    if (crowded) t.places.push(extra('AC01', 'accommodation'), extra('TW01', 'toilet_water'), extra('LF01', 'lost_found'), extra('HD01', 'help_desk'));
+    const snap = { ...snapshot(t, { TH01: { lat: 25.69, lon: 85.17 } }), qa_enabled: false };
+    for (const lang of ['en', 'hi']) {
+      const m = ok(melaHandle(req({ kind: 'open', id: 'mela:open' }, { lang, other_services: others }), snap));
+      const [mela, district] = m.messages[0].sections;
+      assert.deepEqual(district.rows.map((r) => [r.id, r.title]), [['core:open:cmp', lang === 'hi' ? 'शिकायत दर्ज करें' : 'File a Complaint']]);
+      assert.equal(mela.rows.length + district.rows.length <= 10, true, 'WhatsApp lists hold 10 rows');
+      if (crowded) {
+        assert.ok(mela.rows.some((r) => r.id === 'mela:more'));
+        const more = ok(melaHandle(req({ kind: 'list', id: 'mela:more' }, { lang, other_services: others }), snap));
+        const all = mela.rows.concat(more.messages[0].sections[0].rows).map((r) => r.id);
+        for (const c of ['thana', 'health_centre', 'vet_camp', 'parking', 'ghat', 'accommodation', 'toilet_water', 'lost_found', 'help_desk']) {
+          assert.ok(all.includes(`mela:cat:${c}`), `${c} still reachable`);
+        }
+      }
+    }
+  }
+  // opened on its own (not as the main menu): one section, as before
+  assert.equal(ok(melaHandle(req({ kind: 'open', id: 'mela:open' }), snapshot())).messages[0].sections.length, 1);
+});
+
 test('menu: data-driven, max 10 rows, near hidden until coordinates exist', () => {
   const m = ok(melaHandle(req({ kind: 'open', id: 'mela:open' }), snapshot()));
   const ids = m.messages[0].sections[0].rows.map((r) => r.id);

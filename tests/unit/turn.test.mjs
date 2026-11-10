@@ -85,6 +85,59 @@ test('finalize: welcome on first contact, feedback once per session, end params'
   assert.equal(rl.end, null);
 });
 
+test('feedback: at most once a day, even across conversations', () => {
+  const answer = (over) => {
+    const d = decideTurn(item({ kind: 'button', id: 'echo:again' }), turn(over), flags);
+    return finalizeTurn(d, afterService(d, { messages: [{ type: 'text', body: 'ok' }], next_state: null, context: {}, done: true }));
+  };
+  const first = answer({});
+  assert.equal(first.send.messages.at(-1).body, 'feedback_prompt_en');
+  assert.equal(first.end.feedback_asked, true, 'recorded so it is not asked again today');
+  // a new conversation (empty context) the same day: no second prompt
+  const later = answer({ feedback_asked_today: true });
+  assert.deepEqual(later.send.messages.map((m) => m.body), ['ok']);
+  assert.equal(later.end.feedback_asked, false);
+});
+
+test('home service: "hi" opens its menu, which lists the other services; their rows open them', () => {
+  const mela = { ...echo, service_key: 'mela', id_prefix: 'mela', title_en: 'Sonpur Mela', menu_order: 1 };
+  const cmp = { ...echo, service_key: 'complaint', id_prefix: 'cmp', title_en: 'File a Complaint', title_hi: 'शिकायत दर्ज करें',
+                description_en: 'Report a problem', menu_order: 0 };
+  const home = turn({ services: [mela, cmp], settings: { home_service: 'mela' } });
+  const hi = decideTurn(item({ kind: 'text', text: 'hi' }), home, flags);
+  assert.equal(hi.action, 'service'); assert.equal(hi.service.service_key, 'mela'); assert.equal(hi.input.id, 'mela:open');
+  const si = serviceInput(hi);
+  assert.deepEqual(si.other_services.map((s) => [s.id, s.title_en, s.title_hi]), [['core:open:cmp', 'File a Complaint', 'शिकायत दर्ज करें']]);
+  // the complaint service itself is not told about the others
+  const open = decideTurn(item({ kind: 'list', id: 'core:open:cmp' }), home, flags);
+  assert.equal(open.action, 'service'); assert.equal(open.service.service_key, 'complaint');
+  assert.equal(open.input.id, 'cmp:open', 'the service sees its own open id');
+  assert.deepEqual(serviceInput(open).other_services, []);
+  // 🏠 Menu also goes home; with the setting off the 2-button menu comes back
+  assert.equal(decideTurn(item({ kind: 'button', id: 'core:menu' }), home, flags).service.service_key, 'mela');
+  const off = decideTurn(item({ kind: 'text', text: 'hi' }), turn({ services: [mela, cmp], settings: {} }), flags);
+  assert.equal(off.action, 'reply'); assert.equal(off.messages[0].type, 'buttons');
+  // a home service that is disabled (not in the list) is ignored
+  assert.equal(decideTurn(item({ kind: 'text', text: 'hi' }), turn({ services: [echo, other], settings: { home_service: 'mela' } }), flags).action, 'reply');
+  // a stale row for a disabled service just shows the menu
+  assert.equal(decideTurn(item({ kind: 'list', id: 'core:open:gone' }), home, flags).service.service_key, 'mela');
+});
+
+test('unreadable messages (voice, video, sticker): a step in progress is kept, reactions get no reply', () => {
+  const T2 = { ...TEMPLATES, unsupported_flow: { en: 'flow_en' } };
+  for (const raw of ['audio', 'video', 'sticker']) {
+    const mid = decideTurn(item({ kind: 'unsupported', raw_type: raw }),
+      turn({ templates: T2, state: 'echo.wait', context: { draft: 1, __core: { fb_asked: true } } }), flags);
+    assert.equal(mid.action, 'reply'); assert.equal(mid.messages[0].body, 'flow_en');
+    const f = finalizeTurn(mid, null);
+    assert.equal(f.end.state, 'echo.wait', `${raw}: the complaint step is not dropped`);
+    assert.deepEqual(f.end.context, { draft: 1, __core: { fb_asked: true } });
+  }
+  const idle = decideTurn(item({ kind: 'unsupported', raw_type: 'audio' }), turn({ templates: T2 }), flags);
+  assert.equal(idle.action, 'service'); assert.equal(idle.pre[0].body, 'unsupported_en', 'then the menu');
+  assert.equal(decideTurn(item({ kind: 'unsupported', raw_type: 'reaction' }), turn({ templates: T2, state: 'echo.wait' }), flags).action, 'stop');
+});
+
 test('service log fields reach the turn record (analytics)', () => {
   const d = afterLlm(decideTurn(item({ kind: 'text', text: 'kab tak' }), turn(), flags), { ok: true, service_key: 'echo', subtype: 'repeat', slots: {}, lang: 'en', confidence: 0.9, tokens: 40 });
   const f = finalizeTurn(d, afterService(d, { messages: [{ type: 'text', body: 'x' }], next_state: null, context: {}, done: false,

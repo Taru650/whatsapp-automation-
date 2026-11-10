@@ -3,6 +3,10 @@
 -- Runtime switches (defaults only; operators change them with UPDATE).
 INSERT INTO core.settings (key, value) VALUES ('llm_enabled', 'true')
 ON CONFLICT (key) DO NOTHING;
+-- "hi" opens the Sonpur Mela menu directly; the other services (File a
+-- Complaint) are rows in it. Set to '' to go back to the 2-button main menu.
+INSERT INTO core.settings (key, value) VALUES ('home_service', 'mela')
+ON CONFLICT (key) DO NOTHING;
 
 -- National emergency numbers the bot may always mention.
 SELECT core.register_numbers('static', ARRAY['112', '108', '1098', '1091', '101', '100']);
@@ -17,6 +21,8 @@ INSERT INTO core.templates (key, hi, en, max_len) VALUES
   ('menu_section',       'सेवाएँ', 'Services', 24),
   ('unsupported',        'माफ़ कीजिए, मैं अभी केवल लिखे हुए संदेश और बटन समझ सकता हूँ। कृपया टाइप करें या मेनू से चुनें।',
                          'Sorry, I can only understand typed messages and button taps for now. Please type or choose from the menu.', 1024),
+  ('unsupported_flow',   'माफ़ कीजिए, मैं इस तरह का संदेश नहीं पढ़ सकता। कृपया ऊपर वाले चरण को जारी रखें – जवाब लिखकर भेजें या बटन दबाएँ।',
+                         'Sorry, I can''t read this kind of message. Please continue with the step above – type your answer or tap a button.', 1024),
   ('rate_limited',       'आप बहुत तेज़ी से संदेश भेज रहे हैं। कृपया कुछ मिनट बाद फिर कोशिश करें।',
                          'You are sending messages very quickly. Please try again in a few minutes.', 1024),
   ('error_apology',      'माफ़ कीजिए, कुछ गड़बड़ हो गई। कृपया दोबारा कोशिश करें या "मेनू" लिखें।',

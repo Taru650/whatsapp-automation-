@@ -48,6 +48,11 @@ function decideRoute({ input, state, services, isAdmin, llmEnabled }) {
   if (input.id) {
     const id = input.id;
     if (id === 'core:menu') return { action: 'menu' };
+    if (id.startsWith('core:open:')) {
+      // a service row shown inside the home service's menu
+      const target = svcByPrefix.get(id.slice('core:open:'.length));
+      return target ? { action: 'service', service: target, open: true } : { action: 'menu', reason: 'stale_id' };
+    }
     if (id.startsWith('lang:')) return { action: 'lang', lang: id.slice(5) === 'hi' ? 'hi' : 'en' };
     if (id.startsWith('fb:')) {
       const [, vote, svc] = id.split(':');
