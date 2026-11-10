@@ -349,7 +349,9 @@ test('toilets: own menu row after vet camps, in Near me, and listed with walking
   const hi = ok(melaHandle(req({ kind: 'open', id: 'mela:open' }, { lang: 'hi' }), snap));
   assert.match(JSON.stringify(hi), /🚻 शौचालय/);
   const near = ok(melaHandle(req({ kind: 'list', id: 'mela:near' }), snap));
-  assert.ok(near.messages[0].sections[0].rows.some((r) => r.id === 'mela:near:toilet'), 'Near me offers toilets');
+  assert.equal(near.messages[0].type, 'location_request', 'Near me asks for the location straight away');
+  const all = ok(melaHandle(req({ kind: 'location', lat: 25.6931, lon: 85.1702 }, { state: 'mela.await_location', context: {} }), snap));
+  assert.match(all.messages[0].body, /🚻 \*Nearest toilet\*/, 'toilets are among the services');
   const list = ok(melaHandle(req({ kind: 'text', text: 'toilet kahan hai' }), snap));
   const text = list.messages.map((m) => m.body || '').join('\n');
   assert.match(text, /Gate 1 toilet block/);
@@ -371,9 +373,48 @@ test('toilets: "nearest toilet" asks for the location, then gives the 3 nearest 
   const pin = res.messages.find((m) => m.type === 'location');
   assert.equal(pin.name, 'Gate 1 toilet block');
   assert.equal(res.log.subtype, 'near_toilet');
-  // a location shared without asking first: nearest thana, health centre and toilet
+  // a location shared without asking first: the nearest of every service, toilets included
   const any = ok(melaHandle(req({ kind: 'location', lat: 25.6931, lon: 85.1702 }), withToilets()));
   assert.match(any.messages[0].body, /Nearest toilet/);
+});
+
+test('near me: one location share, then the nearest ONE of every service, no category question', () => {
+  const coords = { TH01: { lat: 25.6930, lon: 85.1760 }, TH03: { lat: 25.6922, lon: 85.1752 }, HC01: { lat: 25.6935, lon: 85.1745 },
+    GH01: { lat: 25.6925, lon: 85.1755 }, GH02: { lat: 25.7100, lon: 85.2000 } };
+  const s = snapshot(undefined, coords);
+  for (const lang of ['en', 'hi']) {
+    // the menu row and typed "near me" both go straight to the location request
+    for (const input of [{ kind: 'list', id: 'mela:near' }, { kind: 'text', text: lang === 'hi' ? 'मेरे पास' : 'near me' }]) {
+      const ask = ok(melaHandle(req(input, { lang }), s));
+      assert.equal(ask.messages.length, 1); assert.equal(ask.messages[0].type, 'location_request', JSON.stringify(input));
+      assert.equal(ask.next_state, 'mela.await_location'); assert.deepEqual(ask.context, {});
+    }
+  }
+  const res = ok(melaHandle(req({ kind: 'location', lat: 25.6921, lon: 85.1751 }, { state: 'mela.await_location', context: {} }), s));
+  const b = body(res);
+  // one per category that has pins, in menu order, the closest of each
+  const heads = [...b.matchAll(/\*Nearest ([^*]+)\*/g)].map((m) => m[1]);
+  assert.deepEqual(heads, ['police station', 'health centre', 'ghat'], b);
+  assert.match(b, /\*Theater Thana\* – ≈10 m/, 'closest police station, not the second one');
+  assert.doesNotMatch(b, /Nakash Thana/, 'only one per service');
+  assert.equal((b.match(/🧭 https:/g) || []).length, 3, 'a walking link for each');
+  assert.deepEqual(res.messages.map((m) => m.type), ['text', 'buttons'], 'no map pin: 2 WhatsApp messages, not 3');
+  assert.equal(res.log.subtype, 'near_all'); assert.equal(res.log.detail, 'gps:<250m');
+  // sheet float noise does not reach the link
+  const noisy = snapshot(undefined, { TH03: { lat: 25.6917529999999, lon: 85.1852869999999 } });
+  const n = ok(melaHandle(req({ kind: 'location', lat: 25.6921, lon: 85.1751 }, { state: 'mela.await_location', context: { near_cat: 'thana' } }), noisy));
+  assert.match(body(n), /destination=25\.691753,85\.185287&/);
+  assert.doesNotMatch(JSON.stringify(res), /origin=|25\.6921/, 'the citizen location never leaves');
+  // a landmark instead of GPS: the same one-of-each answer
+  const lm = ok(melaHandle(req({ kind: 'text', text: 'Kali Ghat' }, { state: 'mela.await_location', context: {} }), s));
+  assert.equal(lm.log.subtype, 'near_all'); assert.match(lm.log.detail, /^landmark:/);
+  // outside the Mela area: the menu with a note, no guesses
+  const far = ok(melaHandle(req({ kind: 'location', lat: 25.6, lon: 85.1 }, { state: 'mela.await_location', context: {} }), s));
+  assert.match(far.messages[0].body, /outside the Mela area/); assert.equal(far.messages[0].type, 'list');
+  assert.equal(far.log.detail, 'gps:outside');
+  // a category's own 📍 Nearest button still gives the 3 nearest of that one kind
+  const one = ok(melaHandle(req({ kind: 'location', lat: 25.6921, lon: 85.1751 }, { state: 'mela.await_location', context: { near_cat: 'thana' } }), s));
+  assert.match(body(one), /1\. \*Theater Thana\*[\s\S]*2\. \*Nakash Thana\*/); assert.equal(one.messages[1].type, 'location');
 });
 
 test('toilets: a sheet that still uses the older toilet_water category is found by a toilet question', () => {

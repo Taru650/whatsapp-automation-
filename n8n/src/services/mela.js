@@ -125,7 +125,9 @@ function fmtDistance(m, lang) {
 function directionsUrl(p) {
   // No origin on purpose: Maps then follows the phone's live GPS, and the
   // citizen's own coordinates never appear in a link.
-  return `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}&travelmode=walking`;
+  // 6 decimals (~10 cm): drops sheet float noise like 85.1852869999999
+  const c = (v) => Number(Number(v).toFixed(6));
+  return `https://www.google.com/maps/dir/?api=1&destination=${c(p.lat)},${c(p.lon)}&travelmode=walking`;
 }
 
 function hasCoords(p) {
@@ -220,7 +222,7 @@ function menuRows(lang, snap) {
   const add = (id, en, hi, den, dhi) => rows.push({ id, title: melaT(lang, en, hi), description: melaT(lang, den || '', dhi || '') });
   if ((snap.events || []).length) add('mela:today', "Today's programme", 'आज का कार्यक्रम', 'Cultural programme and artists', 'सांस्कृतिक कार्यक्रम व कलाकार');
   add('mela:control', 'Control room', 'कंट्रोल रूम', 'Helpline and officers on duty now', 'हेल्पलाइन और अभी ड्यूटी पर अधिकारी');
-  if (catsWithCoords(snap).length) add('mela:near', '📍 Near me', '📍 मेरे पास', 'Nearest police, health, toilet, vet camp', 'नज़दीकी थाना, अस्पताल, शौचालय, पशु शिविर');
+  if (catsWithCoords(snap).length) add('mela:near', '📍 Near me', '📍 मेरे पास', 'Nearest of every service – police, health, toilet…', 'हर सेवा का नज़दीकी – थाना, अस्पताल, शौचालय…');
   for (const c of categoriesPresent(snap)) add(`mela:cat:${c}`, `${catIcon(c)} ${catLabel(snap, c, 'en')}`, `${catIcon(c)} ${catLabel(snap, c, 'hi')}`);
   if ((snap.guidelines || []).length) add('mela:rules', "Do's & don'ts", 'क्या करें, क्या न करें');
   return rows;
@@ -401,14 +403,17 @@ function rulesScreen(req, snap) {
 }
 
 // ---- near me -------------------------------------------------------------------------------
-function nearChooser(req, snap) {
+// "Near me": no category question - one location share, then the nearest one of
+// every service that has map pins (a citizen who knows what they want picks the
+// category from the main menu, whose screen has its own 📍 Nearest button).
+function askLocationAll(req, snap) {
   const lang = req.lang;
-  const cats = catsWithCoords(snap);
-  if (!cats.length) return melaMenu(req, snap, melaT(lang, 'The location service will start soon.', 'लोकेशन सेवा जल्द शुरू होगी।'));
+  if (!catsWithCoords(snap).length) return melaMenu(req, snap, melaT(lang, 'The location service will start soon.', 'लोकेशन सेवा जल्द शुरू होगी।'));
   return {
-    messages: [{ type: 'list', body: melaT(lang, '📍 What are you looking for near you?', '📍 आप अपने पास क्या ढूँढ रहे हैं?'), button: melaT(lang, 'Choose', 'चुनें'),
-      sections: [{ title: melaT(lang, 'Near me', 'मेरे पास'), rows: cats.slice(0, 10).map((c) => ({ id: `mela:near:${c}`, title: `${catIcon(c)} ${catLabel(snap, c, lang)}` })) }] }],
-    next_state: null, context: {}, done: false, log: { subtype: 'near_menu', resolved: true },
+    messages: [{ type: 'location_request', body: melaT(lang,
+      '📍 Tap *Send location* to see the nearest police station, health centre, toilet and every other service – one of each, with walking directions.\nNo GPS? Type a nearby landmark instead (e.g. Kali Ghat).',
+      '📍 *Send location* दबाएँ – नज़दीकी थाना, स्वास्थ्य केंद्र, शौचालय और हर दूसरी सेवा, हर एक का एक-एक, पैदल रास्ते के साथ।\nGPS नहीं है? पास की कोई जगह लिखें (जैसे काली घाट)।') }],
+    next_state: 'mela.await_location', context: {}, done: false, log: { subtype: 'near_ask_all', resolved: true },
   };
 }
 
@@ -441,7 +446,13 @@ function nearestScreen(req, snap, origin, cats, fromLandmark) {
   const s = snap.settings || {};
   const center = s.mela_center_lat && s.mela_center_lon ? { lat: Number(s.mela_center_lat), lon: Number(s.mela_center_lon) } : null;
   const radiusM = (Number(s.mela_radius_km) || 5) * 1000;
+  const single = cats.length === 1;
   if (!fromLandmark && center && haversineM(origin.lat, origin.lon, center.lat, center.lon) > radiusM) {
+    if (!single) {
+      const out = melaMenu(req, snap, melaT(lang, 'You seem to be outside the Mela area. Choose a service below for its full list.', 'आप मेला क्षेत्र से बाहर लगते हैं। पूरी सूची के लिए नीचे से सेवा चुनें।'));
+      out.log = { subtype: 'near_outside', resolved: true, detail: 'gps:outside' };
+      return out;
+    }
     const cat = cats[0];
     const r = categoryScreen(req, snap, cat, false);
     r.messages.unshift({ type: 'text', body: melaT(lang, 'You seem to be outside the Mela area. Here is the full list:', 'आप मेला क्षेत्र से बाहर लगते हैं। पूरी सूची:') });
@@ -450,7 +461,6 @@ function nearestScreen(req, snap, origin, cats, fromLandmark) {
   }
   const sh = currentShift(snap, req.now_ist);
   const msgs = [];
-  const single = cats.length === 1;
   let nearestOverall = null;
   const sections = [];
   for (const cat of cats) {
@@ -466,7 +476,9 @@ function nearestScreen(req, snap, origin, cats, fromLandmark) {
   if (!sections.length) return melaMenu(req, snap, melaT(lang, 'The location service will start soon.', 'लोकेशन सेवा जल्द शुरू होगी।'));
   const note = melaT(lang, '_Distances are straight-line and approximate; tap 🧭 for walking directions._', '_दूरी सीधी रेखा में और अनुमानित है; पैदल रास्ते के लिए 🧭 दबाएँ।_');
   msgs.push({ type: 'text', body: `${sections.join('\n\n')}\n\n${note}` });
-  msgs.push({ type: 'location', lat: nearestOverall.p.lat, lon: nearestOverall.p.lon, name: placeName(nearestOverall.p, lang), address: placeLocation(nearestOverall.p, lang) });
+  // one category: a map pin of the closest; all services: every line has its own
+  // 🧭 link, so no pin (one WhatsApp message fewer)
+  if (single) msgs.push({ type: 'location', lat: nearestOverall.p.lat, lon: nearestOverall.p.lon, name: placeName(nearestOverall.p, lang), address: placeLocation(nearestOverall.p, lang) });
   const buttons = single ? [{ id: `mela:cat:${cats[0]}`, title: melaT(lang, '📋 See all', '📋 सभी देखें') }, menuBtn(lang)] : [menuBtn(lang)];
   msgs.push({ type: 'buttons', body: melaT(lang, 'Anything else?', 'और कुछ?'), buttons });
   // analytics: how far citizens are from help (bucketed; the location itself is never logged)
@@ -576,7 +588,7 @@ function melaHandle(req, snap) {
   if (id === 'mela:control') return controlScreen(r, s, false);
   if (id === 'mela:roster:control') return controlScreen(r, s, true);
   if (id === 'mela:rules') return rulesScreen(r, s);
-  if (id === 'mela:near') return nearChooser(r, s);
+  if (id === 'mela:near') return askLocationAll(r, s);
   if (id === 'mela:more') return moreMenu(r, s);
   if (id === 'mela:ask' && !qaOn(s)) return melaMenu(r, s); // a button from before the AI was switched off
   if (id === 'mela:ask') {
@@ -593,7 +605,8 @@ function melaHandle(req, snap) {
 
   // Location shared by a citizen
   if (input.kind === 'location') {
-    const cats = ctx.near_cat ? [ctx.near_cat] : ['thana', 'health_centre', 'toilet'].filter((c) => catsWithCoords(s).includes(c));
+    // asked for one category, or Near me / a location sent unasked: every service
+    const cats = ctx.near_cat ? [ctx.near_cat] : catsWithCoords(s);
     if (!cats.length) return melaMenu(r, s, melaT(lang, 'The location service will start soon.', 'लोकेशन सेवा जल्द शुरू होगी।'));
     return nearestScreen(r, s, { lat: input.lat, lon: input.lon }, cats, false);
   }
@@ -602,7 +615,7 @@ function melaHandle(req, snap) {
   const text = input.text || '';
   if (req.state === 'mela.await_location') {
     const landmark = matchPlace(s, text, true);
-    if (landmark) return nearestScreen(r, s, landmark, [ctx.near_cat || 'thana'], true);
+    if (landmark) return nearestScreen(r, s, landmark, ctx.near_cat ? [ctx.near_cat] : catsWithCoords(s), true);
     if (!detectTopic(text).topic) {
       return { messages: [{ type: 'location_request', body: melaT(lang, "I couldn't find that place. Tap *Send location*, or type another landmark.", 'यह जगह नहीं मिली। *Send location* दबाएँ या कोई और जगह लिखें।') }],
         next_state: 'mela.await_location', context: ctx, done: false, log: { subtype: 'near_landmark_miss', resolved: false } };
@@ -620,7 +633,7 @@ function melaHandle(req, snap) {
   // older sheets file toilets under toilet_water ("Toilets & water"): a toilet question still finds them
   if (topic === 'toilet' && !isCat('toilet') && isCat('toilet_water')) topic = 'toilet_water';
   if ((near || topic === 'near') && (isCat(topic) || !topic || topic === 'near')) {
-    return isCat(topic) ? askLocation(r, s, topic) : nearChooser(r, s);
+    return isCat(topic) ? askLocation(r, s, topic) : askLocationAll(r, s);
   }
   if (place && !isCat(topic)) return placeScreen(r, s, place);
   if (isCat(topic)) return categoryScreen(r, s, topic, false);
