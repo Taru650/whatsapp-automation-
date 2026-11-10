@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS core.message_log (
 );
 -- M3: a service-defined analytics tag, e.g. near-me 'gps:<500m' (never a location).
 ALTER TABLE core.message_log ADD COLUMN IF NOT EXISTS detail text;
+-- IST day the citizen was last asked "Was this helpful?" (asked at most once a day)
+ALTER TABLE core.citizens ADD COLUMN IF NOT EXISTS feedback_asked_on date;
 CREATE INDEX IF NOT EXISTS message_log_ts_idx ON core.message_log (ts);
 CREATE INDEX IF NOT EXISTS message_log_service_ts_idx ON core.message_log (service_key, ts);
 CREATE INDEX IF NOT EXISTS message_log_rate_idx ON core.message_log (wa_hash, ts) WHERE direction = 'in';
@@ -269,6 +271,8 @@ BEGIN
         'is_dup',        false,
         'wa_hash',       v_hash,
         'lang',          v_cit.lang,
+        -- "Was this helpful?" is asked at most once per citizen per IST day
+        'feedback_asked_today', v_cit.feedback_asked_on IS NOT DISTINCT FROM (now() AT TIME ZONE 'Asia/Kolkata')::date,
         'first_contact', v_first,
         'is_admin',      EXISTS (SELECT 1 FROM core.admins a WHERE a.wa_hash = v_hash),
         'rate_limited',  v_over,
@@ -392,7 +396,7 @@ BEGIN
 END $$;
 
 -- p: {wa_hash, version, state, context, in_msg_id, service_key, subtype, via, resolved,
---     llm_tokens, latency_ms, set_lang, feedback_rating, unanswered_reason, text, detail}
+--     llm_tokens, latency_ms, set_lang, feedback_rating, feedback_asked, unanswered_reason, text, detail}
 CREATE OR REPLACE FUNCTION core.rpc_end_turn(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql AS $$
 DECLARE ok boolean;
@@ -402,6 +406,10 @@ BEGIN
     END IF;
     IF p->>'set_lang' IN ('hi', 'en') THEN
         PERFORM core.set_lang(p->>'wa_hash', p->>'set_lang');
+    END IF;
+    IF coalesce((p->>'feedback_asked')::boolean, false) THEN
+        UPDATE core.citizens SET feedback_asked_on = (now() AT TIME ZONE 'Asia/Kolkata')::date
+        WHERE wa_hash = p->>'wa_hash';
     END IF;
     IF p ? 'feedback_rating' AND p->>'feedback_rating' IS NOT NULL THEN
         INSERT INTO core.feedback (wa_hash, service_key, rating)

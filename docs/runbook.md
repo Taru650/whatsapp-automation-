@@ -99,6 +99,10 @@ With no data, screens still work but say "no places/events found".
 | Deploy a new version | `git pull && dc run --rm migrate && dc stop n8n && dc run --rm import && dc up -d n8n` |
 | AI (LLM) | **Off at launch** (`LLM_ENABLED=false` in `.env`). On: set `LLM_ENABLED=true` and `ANTHROPIC_API_KEY`, then `dc up -d n8n` |
 | Turn the LLM off (no restart) | `dc exec postgres psql -U bot citizen_bot -c "update core.settings set value='false' where key='llm_enabled'"` |
+| First screen ("hi") | Opens the Sonpur Mela menu, with **File a Complaint** in its own "District services" section (`home_service = 'mela'`). Back to the 2-button menu (no restart): `dc exec postgres psql -U bot citizen_bot -c "update core.settings set value='' where key='home_service'"`; `'mela'` turns it on again |
+| Greeting (first contact) | Sent on top of the first reply (the menu): one WhatsApp message per new citizen, not two (`welcome_in_reply = 'true'`). It falls back to its own message only when the two would not fit WhatsApp's limit. Separate message again: `... set value='false' where key='welcome_in_reply'` |
+| "Was this helpful? 👍/👎" | **Off** (`feedback_enabled = 'false'`): it is one more WhatsApp message and Meta charges per message. On (asked at most once per citizen per day): `dc exec postgres psql -U bot citizen_bot -c "update core.settings set value='true' where key='feedback_enabled'"` |
+| Voice note / video / sticker | General "can't read this message" reply. In the middle of a step (a complaint waiting for its photo) the step is kept, not dropped; emoji reactions get no reply |
 | Disable/enable a service | `... -c "update core.services set enabled=false where service_key='echo'"` (the menu changes on the next message) |
 | Rotate the WhatsApp token | edit `.env` → `dc up -d n8n` |
 | Change admin numbers | edit `ADMIN_WA_NUMBERS` → `dc run --rm migrate` (stores hashes) and `dc up -d n8n` |
