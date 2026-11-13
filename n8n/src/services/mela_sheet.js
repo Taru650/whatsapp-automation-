@@ -15,8 +15,21 @@ const MELA_TABS = {
     'active', 'verified', 'updated_by'],
   guidelines: ['id', 'kind', 'text_en', 'text_hi', 'sort', 'active', 'verified', 'updated_by'],
   settings: ['key', 'value'],
+  // Places to visit (bazaars, food courts, exhibitions, temples ...): shown under
+  // "Places to visit" and used by the AI answers. keywords: extra words citizens
+  // may type for it, comma separated (e.g. "horse, ghoda, घोड़ा").
+  attractions: ['id', 'type', 'name_en', 'name_hi', 'about_en', 'about_hi', 'location_en', 'location_hi', 'lat', 'lon',
+    'hours', 'keywords', 'active', 'verified', 'updated_by'],
+  // Questions and approved answers: the AI answers from these (and the rest of the sheet).
+  faq: ['id', 'question_en', 'question_hi', 'answer_en', 'answer_hi', 'active', 'verified', 'updated_by'],
 };
 const REQUIRED_TABS = ['places', 'control_room', 'events', 'settings'];
+// Tabs the sync reads only when they exist in the sheet (Google rejects a request
+// for a missing tab, so the sync asks which tabs exist first).
+const OPTIONAL_TABS = ['guidelines', 'attractions', 'faq'];
+// A mobile or landline written inside free text (FAQ answers, attraction notes):
+// registered for the phone guard like every other sheet number.
+const PHONE_IN_TEXT = /(?<!\d)(?:\+?91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}(?!\d)|(?<!\d)0\d{2,4}[\s-]?\d{6,8}(?!\d)/g;
 const CATEGORY_RE = /^[a-z][a-z_]{1,30}$/;
 const KNOWN_DESKS = ['Magistrate', 'Police', 'Sanitation & Water', 'Electricity', 'Health', 'Other'];
 const GUIDELINE_KINDS = ['do', 'dont', 'emergency'];
@@ -25,7 +38,9 @@ const KRUTI_DEV = /[¼½¾]|[a-z]\[[a-z]|\][a-z]/i;
 const DEVANAGARI = /[ऀ-ॿ]/;
 
 function cell(v) {
-  return v == null ? '' : String(v).trim();
+  // the Sheets API sends text; anything else (an object from a broken response) is empty
+  if (v == null || typeof v === 'object' || typeof v === 'function') return '';
+  return String(v).trim();
 }
 
 function asBool(v, dflt) {
@@ -105,7 +120,7 @@ function validateMelaSheet(tabs, opts = {}) {
   const warnings = [];
   const err = (tab, row, msg) => errors.push({ tab, row, msg });
   const warn = (tab, row, msg) => warnings.push({ tab, row, msg });
-  const data = { places: [], duty: [], control: [], events: [], guidelines: [], settings: {} };
+  const data = { places: [], duty: [], control: [], events: [], guidelines: [], attractions: [], faq: [], text_numbers: [], settings: {} };
   const phoneOwners = new Map(); // digits -> Set(person|place)
   let skippedUnverified = 0;
 
@@ -252,6 +267,62 @@ function validateMelaSheet(tabs, opts = {}) {
     }
   }
 
+  // places to visit (optional tab)
+  const latLon = (tab, r) => {
+    if (!r.lat && !r.lon) return [null, null];
+    const lat = Number(r.lat);
+    const lon = Number(r.lon);
+    if (lat >= 6 && lat <= 37 && lon >= 68 && lon <= 98) return [lat, lon];
+    err(tab, r.__row, `lat/lon "${r.lat}, ${r.lon}" is not a location in India (lat 25.x, lon 85.x for Sonpur; check they are not swapped)`);
+    return [null, null];
+  };
+  const numbersIn = (tab, r, cols) => {
+    for (const c of cols) {
+      for (const m of String(r[c] || '').match(PHONE_IN_TEXT) || []) {
+        const p = normPhone(m);
+        if (p.error) warn(tab, r.__row, `${c}: ${p.error}`);
+        else data.text_numbers.push(p.value);
+      }
+    }
+  };
+  if (tabs.attractions) {
+    const attIds = new Set();
+    for (const r of rowsOf(tabs.attractions).rows) {
+      if (!r.id) { err('attractions', r.__row, 'id is empty'); continue; }
+      if (attIds.has(r.id)) err('attractions', r.__row, `duplicate id "${r.id}"`);
+      attIds.add(r.id);
+      if (!include('attractions', r)) continue;
+      const type = (r.type || '').toLowerCase().replace(/[\s-]+/g, '_');
+      if (!CATEGORY_RE.test(type)) err('attractions', r.__row, `type "${r.type}" must be a word like bazaar, food_court, exhibition, temple`);
+      if (!r.name_en && !r.name_hi) err('attractions', r.__row, 'name_en or name_hi is required');
+      ['name_en', 'name_hi', 'about_en', 'about_hi', 'location_en', 'location_hi'].forEach((c) => textCheck('attractions', r, c));
+      const [lat, lon] = latLon('attractions', r);
+      if (lat == null) warn('attractions', r.__row, `"${r.name_en || r.name_hi}" has no lat/lon: no map link`);
+      numbersIn('attractions', r, ['about_en', 'about_hi']);
+      const keywords = (r.keywords || '').split(/[,;|]/).map((k) => k.trim().toLowerCase()).filter((k) => k.length >= 3);
+      data.attractions.push({ id: r.id, type, name_en: r.name_en, name_hi: r.name_hi, about_en: r.about_en, about_hi: r.about_hi,
+        location_en: r.location_en, location_hi: r.location_hi, lat, lon, hours: r.hours, keywords, sort: data.attractions.length });
+    }
+  }
+
+  // questions and answers (optional tab)
+  if (tabs.faq) {
+    const faqIds = new Set();
+    for (const r of rowsOf(tabs.faq).rows) {
+      if (!include('faq', r)) continue;
+      const id = r.id || `Q${r.__row}`;
+      if (faqIds.has(id)) err('faq', r.__row, `duplicate id "${id}"`);
+      faqIds.add(id);
+      if (!r.question_en && !r.question_hi) err('faq', r.__row, 'question_en or question_hi is required');
+      if (!r.answer_en && !r.answer_hi) err('faq', r.__row, 'answer_en or answer_hi is required');
+      ['question_en', 'question_hi', 'answer_en', 'answer_hi'].forEach((c) => textCheck('faq', r, c));
+      numbersIn('faq', r, ['answer_en', 'answer_hi']);
+      data.faq.push({ id, question_en: r.question_en, question_hi: r.question_hi, answer_en: r.answer_en, answer_hi: r.answer_hi,
+        sort: data.faq.length });
+    }
+  }
+  data.text_numbers = Array.from(new Set(data.text_numbers));
+
   // test / placeholder data must never reach citizens in production
   if (opts.rejectPlaceholders) {
     const blob = JSON.stringify(data);
@@ -265,7 +336,7 @@ function validateMelaSheet(tabs, opts = {}) {
   if (skippedUnverified) warn('*', 0, `${skippedUnverified} row(s) not marked verified were left out`);
 
   const counts = { places: data.places.length, duty: data.duty.length, control: data.control.length,
-    events: data.events.length, guidelines: data.guidelines.length };
+    events: data.events.length, guidelines: data.guidelines.length, attractions: data.attractions.length, faq: data.faq.length };
   return { data: errors.length ? null : data, errors, warnings, counts };
 }
 
@@ -276,5 +347,5 @@ function addDays(isoDate, n) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { validateMelaSheet, normPhone, normDate, normTime, MELA_TABS, KRUTI_DEV };
+  module.exports = { validateMelaSheet, normPhone, normDate, normTime, MELA_TABS, REQUIRED_TABS, OPTIONAL_TABS, KRUTI_DEV };
 }

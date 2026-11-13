@@ -153,6 +153,21 @@ test('home service: "hi" opens its menu, which lists the other services; their r
   assert.equal(decideTurn(item({ kind: 'list', id: 'core:open:gone' }), home, flags).service.service_key, 'mela');
 });
 
+test('home service alone (complaints off): free text goes straight to it - no classifier call, AI on or off', () => {
+  const mela = { ...echo, service_key: 'mela', id_prefix: 'mela', title_en: 'Sonpur Mela', menu_order: 1 };
+  const cmp = { ...echo, service_key: 'complaint', id_prefix: 'cmp', menu_order: 0 };
+  const q = item({ kind: 'text', text: 'ghoda kahan bikta hai' });
+  const alone = decideTurn(q, turn({ services: [mela], settings: { home_service: 'mela', llm_enabled: 'true' } }), flags);
+  assert.equal(alone.action, 'service'); assert.equal(alone.service.service_key, 'mela');
+  assert.equal(alone.input.text, 'ghoda kahan bikta hai', 'the text itself, not an "open"');
+  const aiOff = decideTurn(q, turn({ services: [mela], settings: { home_service: 'mela', llm_enabled: 'false' } }), flags);
+  assert.equal(aiOff.action, 'service'); assert.equal(aiOff.input.text, 'ghoda kahan bikta hai');
+  // two services: the classifier still decides (or the menu, AI off)
+  assert.equal(decideTurn(q, turn({ services: [mela, cmp], settings: { home_service: 'mela', llm_enabled: 'true' } }), flags).action, 'llm');
+  // a single service that is not the home service keeps the old behaviour
+  assert.equal(decideTurn(q, turn({ services: [echo], settings: { home_service: 'mela', llm_enabled: 'true' } }), flags).action, 'llm');
+});
+
 test('unreadable messages (voice, video, sticker): a step in progress is kept, reactions get no reply', () => {
   const T2 = { ...TEMPLATES, unsupported_flow: { en: 'flow_en' } };
   for (const raw of ['audio', 'video', 'sticker']) {

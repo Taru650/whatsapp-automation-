@@ -3,6 +3,7 @@
 
 * POST /token                                       -> {"access_token": "mock-token", ...}
   (checks it received a JWT-bearer assertion with three parts)
+* GET  /v4/spreadsheets/<id>?fields=sheets.properties.title -> the tab names
 * GET  /v4/spreadsheets/<id>/values:batchGet?ranges=..  -> tabs set via /__set
   (401 without the bearer token; 400 if a requested tab does not exist, like Google)
 * POST /__set   {"tabs": {...}}   replace the sheet content
@@ -52,19 +53,29 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         if url.path == "/__calls":
             return self._send(200, {"calls": STATE["calls"]})
-        if not url.path.endswith("/values:batchGet"):
+        parts = url.path.split("/")
+        is_meta = len(parts) == 4 and parts[1] == "v4" and parts[2] == "spreadsheets"
+        if not (url.path.endswith("/values:batchGet") or is_meta):
             return self._send(404, {"error": "not found"})
         if self.headers.get("Authorization") != "Bearer mock-token":
             return self._send(401, {"error": {"code": 401, "message": "Request had invalid authentication credentials."}})
+        if is_meta:
+            with LOCK:
+                if STATE["fail"]:
+                    return self._send(STATE["fail"], {"error": {"code": STATE["fail"], "message": "backend error"}})
+                return self._send(200, {"sheets": [{"properties": {"title": t}} for t in STATE["tabs"]]})
         with LOCK:
             STATE["calls"] += 1
             if STATE["fail"]:
                 return self._send(STATE["fail"], {"error": {"code": STATE["fail"], "message": "backend error"}})
-            ranges = urllib.parse.parse_qs(url.query).get("ranges", [])
+            raw = urllib.parse.parse_qs(url.query).get("ranges", [])
+            # like Google: 'Tab name' (quoted, '' = one quote) or a bare name
+            ranges = [r[1:-1].replace("''", "'") if len(r) > 1 and r[0] == r[-1] == "'" else r for r in raw]
             missing = [r for r in ranges if r not in STATE["tabs"]]
             if missing:
                 return self._send(400, {"error": {"code": 400, "message": f"Unable to parse range: {missing[0]}"}})
-            out = [{"range": f"{r}!A1:Z1000", "majorDimension": "ROWS", "values": STATE["tabs"][r]} for r in ranges]
+            quote = lambda t: "'" + t.replace("'", "''") + "'" if not t.isalnum() else t
+            out = [{"range": f"{quote(r)}!A1:Z1000", "majorDimension": "ROWS", "values": STATE["tabs"][r]} for r in ranges]
         self._send(200, {"spreadsheetId": url.path.split("/")[3], "valueRanges": out})
 
 

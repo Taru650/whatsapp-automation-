@@ -25,16 +25,20 @@ export function mela() {
   const w = new Workflow(IDS.mela, 'svc-mela');
   const trig = w.trigger();
   const load = w.pg('Load Mela Data',
-    "select svc_mela.snapshot() as snap, (select content from svc_mela.qa_context where id = 1) as qa, coalesce((select value from core.settings where key = 'llm_enabled'), 'true') as llm_setting, $1::int as i",
+    "select svc_mela.snapshot() as snap, (select content from svc_mela.qa_context where id = 1) as qa, coalesce((select value from core.settings where key = 'llm_enabled'), 'true') as llm_setting, " +
+    // AI calls so far today (IST), every citizen together, against the daily cap
+    "(select count(*) from core.message_log where direction = 'in' and llm_tokens > 0 and ts >= (date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'))::int as ai_today, " +
+    "coalesce((select value from core.settings where key = 'llm_daily_cap'), '3000') as ai_cap, $1::int as i",
     '={{ [ $itemIndex ] }}');
   const handle = w.code('Handle', { modules: ['services/mela.js'], main: `
 const { _router, ...req } = $('When Called').item.json;
-const llmOn = String($env.LLM_ENABLED ?? 'true') !== 'false' && String($json.llm_setting) !== 'false';
-// AI off -> no "Ask a question" row in the menu (mela.js qaOn)
-const snap = { ...($json.snap || {}), qa_enabled: llmOn };
+const capReached = Number($json.ai_today) >= Number($json.ai_cap);
+const llmOn = String($env.LLM_ENABLED ?? 'true') !== 'false' && String($json.llm_setting) !== 'false' && !capReached;
+// AI off (or today's cap reached) -> no "Ask a question" row in the menu (mela.js qaOn)
+const snap = { ...($json.snap || {}), qa_enabled: llmOn, qa_off_reason: capReached ? 'llm_daily_cap' : 'llm_disabled' };
 let out = melaHandle(req, snap);
 if (out.qa_request) {
-  // General question: answer only from the approved Mela text (never invents numbers;
+  // General question: answer only from the sheet data + approved Mela text (never invents numbers;
   // the core phone guard double-checks anything that looks like one).
   let resp = { error: { message: 'llm disabled' } };
   if (llmOn) {
@@ -42,7 +46,7 @@ if (out.qa_request) {
       resp = await this.helpers.httpRequest({
         method: 'POST', url: ($env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com') + '/v1/messages', json: true, timeout: 12000,
         headers: { 'x-api-key': $env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-        body: melaQaRequest(out.qa_request.question, $json.qa, snap, $env.LLM_MODEL),
+        body: melaQaRequest(out.qa_request.question, $json.qa, snap, $env.LLM_MODEL, String(req.now_ist || '').slice(0, 10)),
       });
     } catch (e) {
       resp = { error: { message: String(e.message || e) } };
@@ -146,9 +150,12 @@ export function syncMela() {
   const called = w.trigger('When Called');
   const fetch = w.code('Fetch Sheet', { mode: 'runOnceForAllItems', main: `
 // Service-account auth without an n8n credential: sign a JWT (RS256) and swap it
-// for an access token, then read every tab in one batchGet call.
+// for an access token, then read every tab in one batchGet call. Google rejects a
+// batchGet naming a tab that does not exist, so optional tabs (added later by
+// staff) are only requested once the sheet's tab list shows them.
 const crypto = require('crypto');
-const TABS = ['places', 'control_room', 'events', 'guidelines', 'settings'];
+const REQUIRED = ['places', 'control_room', 'events', 'settings'];
+const OPTIONAL = ['guidelines', 'attractions', 'faq'];
 try {
   const raw = String($env.GOOGLE_SA_JSON || '').trim();
   if (!raw) throw new Error('GOOGLE_SA_JSON is not set');
@@ -163,12 +170,27 @@ try {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer') + '&assertion=' + jwt });
   const base = $env.SHEETS_API_BASE || 'https://sheets.googleapis.com';
-  const qs = TABS.map((t) => 'ranges=' + encodeURIComponent(t)).join('&') + '&valueRenderOption=FORMATTED_VALUE';
+  const sheetUrl = base + '/v4/spreadsheets/' + encodeURIComponent($env.MELA_SHEET_ID);
+  const auth = { Authorization: 'Bearer ' + tok.access_token };
+  const meta = await this.helpers.httpRequest({ method: 'GET', timeout: 20000, json: true,
+    url: sheetUrl + '?fields=' + encodeURIComponent('sheets.properties.title'), headers: auth });
+  // tab names matched ignoring case/spaces ("FAQ", "Attractions " work too)
+  const actual = new Map();
+  for (const sh of meta.sheets || []) {
+    const title = String((sh.properties || {}).title || '');
+    actual.set(title.trim().toLowerCase(), title);
+  }
+  // a missing required tab is still requested: the 400 names it in the alert
+  const TABS = REQUIRED.concat(OPTIONAL.filter((t) => actual.has(t)));
+  const canonical = new Map(TABS.map((t) => [actual.get(t) || t, t]));
+  const qs = TABS.map((t) => 'ranges=' + encodeURIComponent("'" + String(actual.get(t) || t).replace(/'/g, "''") + "'")).join('&') + '&valueRenderOption=FORMATTED_VALUE';
   const res = await this.helpers.httpRequest({ method: 'GET', timeout: 20000, json: true,
-    url: base + '/v4/spreadsheets/' + encodeURIComponent($env.MELA_SHEET_ID) + '/values:batchGet?' + qs,
-    headers: { Authorization: 'Bearer ' + tok.access_token } });
+    url: sheetUrl + '/values:batchGet?' + qs, headers: auth });
   const tabs = {};
-  for (const vr of res.valueRanges || []) tabs[String(vr.range).split('!')[0].replace(/^'|'$/g, '')] = vr.values || [];
+  for (const vr of res.valueRanges || []) {
+    const title = String(vr.range).replace(/![^!]*$/, '').replace(/^'|'$/g, '').replace(/''/g, "'");
+    tabs[canonical.get(title) || title.trim().toLowerCase()] = vr.values || [];
+  }
   return [{ json: { ok: true, tabs } }];
 } catch (e) {
   return [{ json: { ok: false, fetch_error: String(e.message || e).slice(0, 300) } }];

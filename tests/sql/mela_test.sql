@@ -37,6 +37,22 @@ BEGIN
     PERFORM svc_mela.replace_all(jsonb_set(d, '{duty}', '[]'));
     ASSERT core.disallowed_numbers(ARRAY['9308642005']) = ARRAY['9308642005'], 'dropped numbers are no longer allowed';
 
+    -- places to visit + FAQ: stored, in the snapshot, numbers inside answers allowed
+    r := svc_mela.replace_all(d || '{
+      "attractions": [{"id": "A01", "type": "animal_bazaar", "name_en": "Ghoda Bazaar", "name_hi": "घोड़ा बाज़ार", "lat": 25.6951, "lon": 85.1782,
+                       "keywords": ["horse", "घोड़ा"], "sort": 0}],
+      "faq": [{"id": "Q01", "question_en": "Entry fee?", "answer_en": "Free. Call 9431000000.", "sort": 0}],
+      "text_numbers": ["9431000000"]}');
+    ASSERT r->>'attractions' = '1' AND r->>'faq' = '1', 'replace_all counts attractions/faq: ' || r::text;
+    s := svc_mela.snapshot();
+    ASSERT s->'attractions'->0->>'name_hi' = 'घोड़ा बाज़ार' AND s->'attractions'->0->'keywords' = '["horse", "घोड़ा"]'::jsonb, 'attractions in snapshot: ' || (s->'attractions')::text;
+    ASSERT (s->'attractions'->0->>'lat')::float8 = 25.6951, 'attraction coordinates';
+    ASSERT s->'faq'->0->>'answer_en' = 'Free. Call 9431000000.', 'faq in snapshot';
+    ASSERT core.disallowed_numbers(ARRAY['9431000000']) = '{}', 'a number written in an FAQ answer may be sent';
+    PERFORM svc_mela.replace_all(d);
+    ASSERT (SELECT count(*) FROM svc_mela.attractions) = 0 AND svc_mela.snapshot()->'faq' = '[]'::jsonb, 'an older sheet without the tabs clears them';
+    ASSERT core.disallowed_numbers(ARRAY['9431000000']) = ARRAY['9431000000'], 'and its numbers';
+
     -- sync alert throttling: once per hour per identical error set
     ASSERT (core.record_sync('{"service_key": "mela", "status": "rejected", "errors": [{"row": 14}]}')->>'should_alert')::boolean, 'first failure alerts';
     ASSERT NOT (core.record_sync('{"service_key": "mela", "status": "rejected", "errors": [{"row": 14}]}')->>'should_alert')::boolean, 'same failure is quiet';
