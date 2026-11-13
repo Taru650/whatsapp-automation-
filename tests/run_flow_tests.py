@@ -683,11 +683,16 @@ def mela_cards_today_control_thana():
     assert "Altamas Faridi" in find_body(out, "Programme", "कार्यक्रम")
     n = len(out)
     send(u, m_list(u, "mela:control", "Control"))
-    out = wait_out(u, n + 2)
+    wait_out(u, n + 1)   # one message when it fits (the menu is inside it)
+    wait_quiet(2)
+    out = out_to(u)
     assert "06158-221084" in find_body(out[n:], "control room", "कंट्रोल रूम")
+    assert out[-1]["payload"]["interactive"]["type"] == "list" and "mela:cat:parking" in ids_of(out[-1]), "next service one choice away"
     n = len(out)
     send(u, m_list(u, "mela:cat:thana", "Police"))
-    out = wait_out(u, n + 2)
+    wait_out(u, n + 1)
+    wait_quiet(2)
+    out = out_to(u)
     card = find_body(out[n:], "Nakash Thana")
     assert "on duty now" in card or "अभी ड्यूटी पर" in card, card[:300]
     assert "not available right now" not in json.dumps([c["payload"] for c in out]), "phone guard must allow synced numbers"
@@ -733,10 +738,11 @@ def mela_admin_pins_site_then_citizen_finds_nearest():
     out = wait_out(u, 2)
     assert out[1]["payload"]["interactive"]["type"] == "location_request_message"
     send(u, m_location(u, 25.6921, 85.1751))
-    out = wait_out(u, 5)
-    card = body_of(out[2])
+    out = wait_out(u, 4)   # map pin, then the results with the menu in the same message
+    assert out[2]["payload"]["type"] == "location"
+    card = body_of(out[3])
     assert "Theater Thana" in card and "destination=25.6922,85.1752&travelmode=walking" in card, card
-    assert out[3]["payload"]["type"] == "location"
+    assert out[3]["payload"]["interactive"]["type"] == "list"
     h = hash_of(u)
     assert "25.6921" not in json.dumps(sql(f"select text, state from core.message_log where wa_hash='{h}'")), "citizen location never stored"
     assert "25.6921" not in json.dumps(sql(f"select context from core.sessions where wa_hash='{h}'"))

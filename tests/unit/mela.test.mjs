@@ -35,6 +35,9 @@ const req = (input, over = {}) => ({ wa_hash: 'h', lang: 'en', state: null, cont
   now_ist: '2025-11-23 15:10', now_iso: '2025-11-23T09:40:00Z', input: { id: null, text: null, ...input }, ...over });
 const ok = (o) => { assert.deepEqual(validateServiceOutput(o, 'mela'), []); for (const m of o.messages) renderMessage(m, '91x'); return o; };
 const body = (o, i = 0) => o.messages[i].body;
+const txt = (o) => o.messages.map((m) => m.body || '').join('\n');
+// every id a citizen can tap in a reply (buttons and list rows)
+const tapIds = (m) => (m.buttons || []).map((b) => b.id).concat(...(m.sections || []).map((sec) => sec.rows.map((r) => r.id)));
 
 // --- sheet validation ------------------------------------------------------------
 test('sheet: the real sample is rejected only for the 9-digit phone (D3)', () => {
@@ -127,7 +130,7 @@ test('menu: AI off -> no "Ask a question" row, and an old Ask button just shows 
   assert.equal(old.messages[0].type, 'list');
   assert.equal(old.next_state, null);
   const unanswered = melaQaFinish(req({}), snap, { error: { message: 'llm disabled' } });
-  assert.deepEqual(unanswered.messages[0].buttons.map((b) => b.id).filter((i) => i === 'mela:ask'), []);
+  assert.ok(!tapIds(unanswered.messages[0]).includes('mela:ask'), 'no Ask option while the AI is off');
 });
 
 test('menu: more than 10 rows -> "More services" holds the rest, nothing is dropped', () => {
@@ -213,14 +216,17 @@ test('thana card shows the on-duty in-charge for the current shift; roster shows
   assert.match(body(now), /Nakash Thana\*\n👤 Rakesh Kumar – 📞 6207037337/);
   assert.doesNotMatch(body(now), /Vishal Anand/, 'shift-1 officer not shown during shift 2');
   assert.match(body(now), /06158-221084/, 'helpline on every card');
-  assert.deepEqual(now.messages[1].buttons.map((b) => b.id), ['mela:roster:thana', 'core:menu']);
+  // no map pins yet -> no Nearest button: the menu list itself, "All shifts" first
+  assert.equal(now.messages.at(-1).type, 'list');
+  assert.deepEqual(now.messages.at(-1).sections[0].rows.map((r) => r.id), ['mela:roster:thana']);
+  assert.ok(tapIds(now.messages.at(-1)).includes('mela:cat:parking'), 'the next service is one choice away');
   const night = ok(melaHandle(req({ kind: 'list', id: 'mela:cat:thana' }, { now_ist: '2025-11-24 02:00' }), s));
   assert.match(body(night), /Srijan Mishra/);
   const roster = ok(melaHandle(req({ kind: 'button', id: 'mela:roster:thana' }), s));
   assert.match(body(roster), /Shift 1 \(06:00–14:00\): Vishal Anand[\s\S]*Shift 3 \(22:00–06:00\): Srijan Mishra/);
   const vet = ok(melaHandle(req({ kind: 'list', id: 'mela:cat:vet_camp' }), s));
   assert.match(body(vet), /Dr\. Vijay Prasad Mandal – 📞 9155688071/);
-  assert.equal(vet.messages[1].buttons.length, 1, 'no shifts, no coords -> only the menu button');
+  assert.deepEqual(vet.messages.at(-1).sections[0].title, 'Sonpur Mela', 'no shifts, no coords -> just the menu list, no extra options');
 });
 
 test('control room: helpline first, desks on duty now, merged desks on every shift', () => {
@@ -241,15 +247,16 @@ test('near me: location request, nearest three, outside the Mela, landmark fallb
   assert.equal(ask.messages[0].type, 'location_request');
   assert.equal(ask.next_state, 'mela.await_location'); assert.deepEqual(ask.context, { near_cat: 'thana' });
   const res = ok(melaHandle(req({ kind: 'location', lat: 25.6921, lon: 85.1751 }, { state: 'mela.await_location', context: { near_cat: 'thana' } }), s));
-  assert.match(body(res), /1\. \*Theater Thana\* – ≈10 m[\s\S]*2\. \*Nakash Thana\* – ≈[\d]+ m[\s\S]*3\. /);
-  assert.match(body(res), /destination=25\.6922,85\.1752&travelmode=walking/);
-  assert.doesNotMatch(body(res), /origin=/, 'citizen coordinates never in a link');
-  assert.equal(res.messages[1].type, 'location');
+  assert.match(txt(res), /1\. \*Theater Thana\* – ≈10 m[\s\S]*2\. \*Nakash Thana\* – ≈[\d]+ m[\s\S]*3\. /);
+  assert.match(txt(res), /destination=25\.6922,85\.1752&travelmode=walking/);
+  assert.doesNotMatch(txt(res), /origin=/, 'citizen coordinates never in a link');
+  assert.equal(res.messages[0].type, 'location', 'map pin first');
+  assert.deepEqual(res.messages.map((m) => m.type), ['location', 'list'], 'pin + results with the menu: 2 messages');
   assert.equal(res.log.detail, 'gps:<250m', 'distance bucket logged, never the location');
   const far = ok(melaHandle(req({ kind: 'location', lat: 25.6, lon: 85.1 }, { state: 'mela.await_location', context: { near_cat: 'thana' } }), s));
   assert.match(body(far), /outside the Mela area/); assert.equal(far.log.detail, 'gps:outside');
   const land = ok(melaHandle(req({ kind: 'text', text: 'kali ghat' }, { state: 'mela.await_location', context: { near_cat: 'thana' } }), s));
-  assert.match(body(land), /Nearest police station/); assert.match(land.log.detail, /^landmark:/);
+  assert.match(txt(land), /Nearest police station/); assert.match(land.log.detail, /^landmark:/);
   const miss = ok(melaHandle(req({ kind: 'text', text: 'xyzzy' }, { state: 'mela.await_location', context: { near_cat: 'thana' } }), s));
   assert.equal(miss.messages[0].type, 'location_request');
   const plain = ok(melaHandle(req({ kind: 'location', lat: 25.6921, lon: 85.1751 }), s));
@@ -352,7 +359,7 @@ test('toilets: own menu row after vet camps, in Near me, and listed with walking
   const near = ok(melaHandle(req({ kind: 'list', id: 'mela:near' }), snap));
   assert.equal(near.messages[0].type, 'location_request', 'Near me asks for the location straight away');
   const all = ok(melaHandle(req({ kind: 'location', lat: 25.6931, lon: 85.1702 }, { state: 'mela.await_location', context: {} }), snap));
-  assert.match(all.messages[0].body, /🚻 \*Nearest toilet\*/, 'toilets are among the services');
+  assert.match(txt(all), /🚻 \*Nearest toilet\*/, 'toilets are among the services');
   const list = ok(melaHandle(req({ kind: 'text', text: 'toilet kahan hai' }), snap));
   const text = list.messages.map((m) => m.body || '').join('\n');
   assert.match(text, /Gate 1 toilet block/);
@@ -367,7 +374,7 @@ test('toilets: "nearest toilet" asks for the location, then gives the 3 nearest 
   assert.equal(ask.messages[0].type, 'location_request');
   assert.deepEqual(ask.context, { near_cat: 'toilet' });
   const res = ok(melaHandle(req({ kind: 'location', lat: 25.6931, lon: 85.1702 }, { state: 'mela.await_location', context: { near_cat: 'toilet' } }), snap));
-  const body = res.messages[0].body;
+  const body = txt(res);
   assert.match(body, /Nearest toilet/);
   assert.ok(body.indexOf('Gate 1 toilet block') < body.indexOf('Main pandal toilets'), 'closest first');
   assert.equal((body.match(/🧭 https:/g) || []).length, 3, 'three nearest, each with a directions link');
@@ -376,7 +383,7 @@ test('toilets: "nearest toilet" asks for the location, then gives the 3 nearest 
   assert.equal(res.log.subtype, 'near_toilet');
   // a location shared without asking first: the nearest of every service, toilets included
   const any = ok(melaHandle(req({ kind: 'location', lat: 25.6931, lon: 85.1702 }), withToilets()));
-  assert.match(any.messages[0].body, /Nearest toilet/);
+  assert.match(txt(any), /Nearest toilet/);
 });
 
 test('near me: one location share, then the nearest ONE of every service, no category question', () => {
@@ -399,12 +406,12 @@ test('near me: one location share, then the nearest ONE of every service, no cat
   assert.match(b, /\*Theater Thana\* – ≈10 m/, 'closest police station, not the second one');
   assert.doesNotMatch(b, /Nakash Thana/, 'only one per service');
   assert.equal((b.match(/🧭 https:/g) || []).length, 3, 'a walking link for each');
-  assert.deepEqual(res.messages.map((m) => m.type), ['text', 'buttons'], 'no map pin: 2 WhatsApp messages, not 3');
+  assert.deepEqual(res.messages.map((m) => m.type), ['list'], 'no map pin: the results and the menu in ONE message');
   assert.equal(res.log.subtype, 'near_all'); assert.equal(res.log.detail, 'gps:<250m');
   // sheet float noise does not reach the link
   const noisy = snapshot(undefined, { TH03: { lat: 25.6917529999999, lon: 85.1852869999999 } });
   const n = ok(melaHandle(req({ kind: 'location', lat: 25.6921, lon: 85.1751 }, { state: 'mela.await_location', context: { near_cat: 'thana' } }), noisy));
-  assert.match(body(n), /destination=25\.691753,85\.185287&/);
+  assert.match(txt(n), /destination=25\.691753,85\.185287&/);
   assert.doesNotMatch(JSON.stringify(res), /origin=|25\.6921/, 'the citizen location never leaves');
   // a landmark instead of GPS: the same one-of-each answer
   const lm = ok(melaHandle(req({ kind: 'text', text: 'Kali Ghat' }, { state: 'mela.await_location', context: {} }), s));
@@ -415,7 +422,7 @@ test('near me: one location share, then the nearest ONE of every service, no cat
   assert.equal(far.log.detail, 'gps:outside');
   // a category's own 📍 Nearest button still gives the 3 nearest of that one kind
   const one = ok(melaHandle(req({ kind: 'location', lat: 25.6921, lon: 85.1751 }, { state: 'mela.await_location', context: { near_cat: 'thana' } }), s));
-  assert.match(body(one), /1\. \*Theater Thana\*[\s\S]*2\. \*Nakash Thana\*/); assert.equal(one.messages[1].type, 'location');
+  assert.match(txt(one), /1\. \*Theater Thana\*[\s\S]*2\. \*Nakash Thana\*/); assert.equal(one.messages[0].type, 'location');
 });
 
 test('toilets: a sheet that still uses the older toilet_water category is found by a toilet question', () => {
@@ -485,11 +492,12 @@ test('places to visit: menu row, grouped list, one-message cards with walking di
   const sm = snapshot(many);
   const types = ok(melaHandle(req({ kind: 'list', id: 'mela:visit' }), sm));
   assert.equal(types.messages[0].type, 'list');
-  assert.deepEqual(types.messages[0].sections[0].rows.map((r) => r.id),
+  assert.deepEqual(types.messages[0].sections[0].rows.map((r) => r.id), /* types list */
     ['mela:visit:animal_bazaar', 'mela:visit:bazaar', 'mela:visit:food_court', 'mela:visit:craft', 'mela:open']);
   const craft = ok(melaHandle(req({ kind: 'list', id: 'mela:visit:craft' }), sm));
   assert.match(body(craft), /Art & craft/); assert.ok(!/Ghoda/.test(body(craft)));
-  assert.deepEqual(craft.messages.at(-1).buttons.map((b) => b.id), ['mela:visit', 'core:menu']);
+  assert.deepEqual(craft.messages.at(-1).sections[0].rows.map((r) => r.id), ['mela:visit']);
+  assert.ok(tapIds(craft.messages.at(-1)).includes('mela:control'), 'menu in the same message');
 });
 
 test('places to visit: free text finds them in Hindi, Hinglish and English - without the AI', () => {
@@ -542,4 +550,39 @@ test('AI answers: one compact cached reference from the whole sheet, map links a
   assert.equal(a.log.llm_tokens, 40 + 500 + 90, 'cache reads counted at a tenth');
   const hiA = ok(melaQaFinish(req({}, { lang: 'hi' }), s, resp({ answerable: true, answer: 'घोड़ा बाज़ार जाइए।', place_ids: ['TH01'] })));
   assert.doesNotMatch(body(hiA), /🧭/, 'a facility without coordinates gets no link');
+});
+
+test('fewer messages: every Mela screen ends in the menu itself, except a 📍 Nearest button screen', () => {
+  const coords = { TH03: { lat: 25.6922, lon: 85.1752 }, TH05: { lat: 25.6931, lon: 85.1761 }, GH01: { lat: 25.6925, lon: 85.1755 } };
+  const s = { ...snapshot(undefined, coords), qa_enabled: true };
+  const r = (input, over) => ok(melaHandle(req(input, over), s));
+  const last = (o) => o.messages.at(-1);
+  // category with map pins: Nearest stays a one-tap button (with Menu)
+  const thana = r({ kind: 'list', id: 'mela:cat:thana' });
+  assert.equal(last(thana).type, 'buttons');
+  assert.deepEqual(last(thana).buttons.map((b) => b.id), ['mela:near:thana', 'mela:roster:thana', 'core:menu']);
+  // every other screen: its last message is the menu list - the next service is one choice away
+  for (const [name, o] of Object.entries({
+    control: r({ kind: 'list', id: 'mela:control' }), today: r({ kind: 'list', id: 'mela:today' }),
+    schedule: r({ kind: 'list', id: 'mela:schedule' }), vet: r({ kind: 'list', id: 'mela:cat:vet_camp' }),
+    place: r({ kind: 'text', text: 'Gaj Grah Chowk' }), nearAll: r({ kind: 'location', lat: 25.6921, lon: 85.1751 }, { state: 'mela.await_location' }),
+  })) {
+    assert.equal(last(o).type, 'list', name);
+    const ids = tapIds(last(o));
+    assert.ok(ids.includes('mela:control') || name === 'control', `${name}: menu inside`);
+    assert.equal(new Set(ids).size, ids.length, `${name}: no repeated option`);
+    assert.ok(ids.length <= 10, `${name}: WhatsApp allows 10 options`);
+    assert.ok(!ids.includes('core:menu'), `${name}: no separate Menu step`);
+  }
+  // short screens: one message; a place with a map pin: pin + card-with-menu
+  assert.equal(r({ kind: 'list', id: 'mela:today' }).messages.length, 1);
+  assert.deepEqual(r({ kind: 'text', text: 'Tribhuvan Chowk' }).messages.map((m) => m.type), ['location', 'list']);
+  // the screen's own option comes first and its repeat is not in the menu part
+  const place = r({ kind: 'text', text: 'Gaj Grah Chowk' });
+  assert.deepEqual(last(place).sections[0].rows.map((x) => x.id), ['mela:cat:thana']);
+  assert.ok(!last(place).sections[1].rows.some((x) => x.id === 'mela:cat:thana'));
+  // AI answer: the answer with "Ask another" + the menu, one message
+  const resp = { stop_reason: 'end_turn', usage: {}, content: [{ type: 'text', text: JSON.stringify({ answerable: true, answer: 'Yes.', place_ids: [] }) }] };
+  const a = ok(melaQaFinish(req({}), s, resp));
+  assert.equal(a.messages.length, 1); assert.equal(tapIds(a.messages[0])[0], 'mela:ask');
 });
