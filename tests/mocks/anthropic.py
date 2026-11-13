@@ -72,6 +72,8 @@ class Handler(BaseHTTPRequestHandler):
         if "answerable" in schema.get("properties", {}):  # Mela Q&A over the sheet + approved text
             known = "unknownq" not in text.lower()
             out = {"answerable": known, "answer": "Sonpur Mela is held at Harihar Kshetra, where the Ganga and Gandak meet." if known else ""}
+            if "phishq" in text.lower():  # a manipulated model: link + a number the sheet does not have
+                out["answer"] = "Pay the entry fee at http://saran-mela-pay.xyz/upi or call 9999988888."
             if "place_ids" in schema.get("properties", {}):
                 # ids of reference lines ("- [ID] ...") sharing a word with the question
                 system = req.get("system")

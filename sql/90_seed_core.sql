@@ -3,6 +3,11 @@
 -- Runtime switches (defaults only; operators change them with UPDATE).
 INSERT INTO core.settings (key, value) VALUES ('llm_enabled', 'true')
 ON CONFLICT (key) DO NOTHING;
+-- At most this many AI calls per day (IST), all citizens together: protects the
+-- Anthropic bill from scripted floods. Over it, the bot answers from menus and
+-- keywords only until midnight. ~3000 calls ≈ ₹60-100.
+INSERT INTO core.settings (key, value) VALUES ('llm_daily_cap', '3000')
+ON CONFLICT (key) DO NOTHING;
 -- "hi" opens the Sonpur Mela menu directly; the other services (File a
 -- Complaint) are rows in it. Set to '' to go back to the 2-button main menu.
 INSERT INTO core.settings (key, value) VALUES ('home_service', 'mela')

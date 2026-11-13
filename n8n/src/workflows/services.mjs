@@ -25,13 +25,17 @@ export function mela() {
   const w = new Workflow(IDS.mela, 'svc-mela');
   const trig = w.trigger();
   const load = w.pg('Load Mela Data',
-    "select svc_mela.snapshot() as snap, (select content from svc_mela.qa_context where id = 1) as qa, coalesce((select value from core.settings where key = 'llm_enabled'), 'true') as llm_setting, $1::int as i",
+    "select svc_mela.snapshot() as snap, (select content from svc_mela.qa_context where id = 1) as qa, coalesce((select value from core.settings where key = 'llm_enabled'), 'true') as llm_setting, " +
+    // AI calls so far today (IST), every citizen together, against the daily cap
+    "(select count(*) from core.message_log where direction = 'in' and llm_tokens > 0 and ts >= (date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'))::int as ai_today, " +
+    "coalesce((select value from core.settings where key = 'llm_daily_cap'), '3000') as ai_cap, $1::int as i",
     '={{ [ $itemIndex ] }}');
   const handle = w.code('Handle', { modules: ['services/mela.js'], main: `
 const { _router, ...req } = $('When Called').item.json;
-const llmOn = String($env.LLM_ENABLED ?? 'true') !== 'false' && String($json.llm_setting) !== 'false';
-// AI off -> no "Ask a question" row in the menu (mela.js qaOn)
-const snap = { ...($json.snap || {}), qa_enabled: llmOn };
+const capReached = Number($json.ai_today) >= Number($json.ai_cap);
+const llmOn = String($env.LLM_ENABLED ?? 'true') !== 'false' && String($json.llm_setting) !== 'false' && !capReached;
+// AI off (or today's cap reached) -> no "Ask a question" row in the menu (mela.js qaOn)
+const snap = { ...($json.snap || {}), qa_enabled: llmOn, qa_off_reason: capReached ? 'llm_daily_cap' : 'llm_disabled' };
 let out = melaHandle(req, snap);
 if (out.qa_request) {
   // General question: answer only from the sheet data + approved Mela text (never invents numbers;

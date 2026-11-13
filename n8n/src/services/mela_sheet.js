@@ -38,7 +38,9 @@ const KRUTI_DEV = /[¼½¾]|[a-z]\[[a-z]|\][a-z]/i;
 const DEVANAGARI = /[ऀ-ॿ]/;
 
 function cell(v) {
-  return v == null ? '' : String(v).trim();
+  // the Sheets API sends text; anything else (an object from a broken response) is empty
+  if (v == null || typeof v === 'object' || typeof v === 'function') return '';
+  return String(v).trim();
 }
 
 function asBool(v, dflt) {

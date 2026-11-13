@@ -1108,6 +1108,23 @@ def _places_to_visit_and_ai_answers():
     answer = body_of(out[4])
     assert "🧭 https://www.google.com/maps/dir/?api=1&destination=25.6951,85.1782&travelmode=walking" in answer, answer
     assert scalar(f"select via from core.message_log where wa_hash='{hash_of(u)}' and direction='in' order by id desc limit 1") == "text"
+    # a manipulated AI reply (link + a number not in the sheet) never reaches the citizen as written
+    send(u, m_text(u, "phishq how do I pay the entry fee"))
+    out = wait_out(u, 6)
+    sent = json.dumps(out[5]["payload"], ensure_ascii=False)
+    assert "saran-mela-pay" not in sent and "http://" not in sent and "9999988888" not in sent, sent
+    assert "phone_guard:9999988888" in (scalar(f"select error from core.message_log where wa_hash='{hash_of(u)}' and direction='out' order by id desc limit 1") or "")
+    # daily AI cap reached: menus only until midnight, no Claude call
+    sql("insert into core.settings (key, value) values ('llm_daily_cap', '0') on conflict (key) do update set value = '0'")
+    try:
+        http("POST", f"{CLAUDE}/__reset", {})
+        send(u, m_text(u, "is every breed available here"))
+        out = wait_out(u, 7)
+        assert out[6]["payload"]["interactive"]["type"] == "list" and "mela:ask" not in ids_of(out[6]), summary(out[6])
+        assert json.loads(http("GET", f"{CLAUDE}/__captured")[1]) == [], "no AI call over the cap"
+        assert scalar(f"select reason from core.unanswered where wa_hash='{hash_of(u)}' order by id desc limit 1") == "llm_daily_cap"
+    finally:
+        sql("update core.settings set value = '3000' where key = 'llm_daily_cap'")
     # AI switched off: a name still finds the place, anything else gets the menu
     sql("update core.settings set value = 'false' where key = 'llm_enabled'")
     try:
