@@ -295,22 +295,45 @@ function menuSplit(lang, snap, reserve = 0) {
   return { main: rows.slice(0, room - 1), more: rows.slice(room - 1) };
 }
 
-function melaMenu(req, snap, prefixText) {
+// The main-menu sections. `actions` (this screen's own options, e.g. "🔁 All
+// shifts") come first and take their room from the 10 rows WhatsApp allows; a
+// menu row that repeats one of them is left out.
+function menuSections(req, snap, actions = []) {
   const lang = req.lang;
   const others = otherServiceRows(req);
-  const { main, more } = menuSplit(lang, snap, others.length);
+  const taken = new Set(actions.map((a) => a.id));
+  const { main, more } = menuSplit(lang, snap, others.length + actions.length);
   const shown = main.slice();
   if (more.length) shown.push({ id: 'mela:more', title: melaT(lang, '➕ More services', '➕ अन्य सेवाएँ'), description: melaT(lang, more.map((r) => r.title).join(', ').slice(0, 72), more.map((r) => r.title).join(', ').slice(0, 72)) });
   if (qaOn(snap)) shown.push({ id: 'mela:ask', title: melaT(lang, 'Ask a question', 'सवाल पूछें'), description: melaT(lang, 'Ask anything about the Mela', 'मेले के बारे में कुछ भी पूछें') });
+  return (actions.length ? [{ title: melaT(lang, 'Options', 'विकल्प'), rows: actions }] : [])
+    .concat([{ title: melaT(lang, 'Sonpur Mela', 'सोनपुर मेला'), rows: shown.filter((r) => !taken.has(r.id)) }])
+    .concat(others.length ? [{ title: melaT(lang, 'District services', 'ज़िला सेवाएँ'), rows: others }] : []);
+}
+
+function melaMenu(req, snap, prefixText) {
+  const lang = req.lang;
   const body = [prefixText, melaT(lang,
     '🎪 *Sonpur Mela* – what would you like to know?\n(Type *english* / *हिंदी* to change language)',
     '🎪 *सोनपुर मेला* – आप क्या जानना चाहते हैं?\n(भाषा बदलने के लिए *english* / *हिंदी* लिखें)')].filter(Boolean).join('\n\n');
   return {
-    messages: [{ type: 'list', body, button: melaT(lang, 'Choose', 'चुनें'),
-      sections: [{ title: melaT(lang, 'Sonpur Mela', 'सोनपुर मेला'), rows: shown }]
-        .concat(others.length ? [{ title: melaT(lang, 'District services', 'ज़िला सेवाएँ'), rows: others }] : []) }],
+    messages: [{ type: 'list', body, button: melaT(lang, 'Choose', 'चुनें'), sections: menuSections(req, snap) }],
     next_state: null, context: {}, done: false, log: { subtype: 'menu', resolved: true },
   };
+}
+
+// End of a screen without a 📍 Nearest button: the menu itself ("Choose"), so the
+// citizen picks the next service straight away - no 🏠 Menu tap and no extra
+// message. The screen's text goes in the same message when it fits (1024).
+function navMessages(req, snap, body, actions = []) {
+  const lang = req.lang;
+  const list = (b) => ({ type: 'list', body: b, button: melaT(lang, 'Choose', 'चुनें'), sections: menuSections(req, snap, actions) });
+  if (body.length <= 1024) return [list(body)];
+  return [{ type: 'text', body: body.slice(0, 4096) }, list(melaT(lang, 'Anything else? Tap *Choose*.', 'और कुछ? *चुनें* दबाएँ।'))];
+}
+
+function actionRow(id, title) {
+  return { id, title, description: '' };
 }
 
 function moreMenu(req, snap) {
@@ -339,7 +362,7 @@ function todayScreen(req, snap, dateIso) {
         `आज के लिए कोई कार्यक्रम सूचीबद्ध नहीं है।\nअगला: *${fmtDate(next.date, 'hi')}* – ${eventLine(next, lang).slice(2)}`)
       : melaT(lang, 'The programme schedule will be announced soon.', 'कार्यक्रम की सूची जल्द जारी की जाएगी।');
   }
-  return melaOut([{ type: 'buttons', body, buttons: [{ id: 'mela:schedule', title: melaT(lang, '📅 Full schedule', '📅 पूरा कार्यक्रम') }, menuBtn(lang)] }],
+  return melaOut(navMessages(req, snap, body, [actionRow('mela:schedule', melaT(lang, '📅 Full schedule', '📅 पूरा कार्यक्रम'))]),
     { log: { subtype: 'today', resolved: events.length > 0 } });
 }
 
@@ -348,7 +371,7 @@ function scheduleScreen(req, snap) {
   const today = (req.now_ist || '').slice(0, 10);
   const upcoming = (snap.events || []).filter((e) => e.date >= today).sort((a, b) => a.date.localeCompare(b.date) || String(a.time).localeCompare(String(b.time)));
   if (!upcoming.length) {
-    return melaOut([{ type: 'buttons', body: melaT(lang, 'The programme schedule will be announced soon.', 'कार्यक्रम की सूची जल्द जारी की जाएगी।'), buttons: [menuBtn(lang)] }],
+    return melaOut(navMessages(req, snap, melaT(lang, 'The programme schedule will be announced soon.', 'कार्यक्रम की सूची जल्द जारी की जाएगी।')),
       { log: { subtype: 'schedule', resolved: false } });
   }
   const lines = [];
@@ -357,8 +380,8 @@ function scheduleScreen(req, snap) {
     if (e.date !== last) { lines.push(`\n*${fmtDate(e.date, lang)}*`); last = e.date; }
     lines.push(eventLine(e, lang));
   }
-  return melaOut([{ type: 'text', body: `${melaT(lang, '📅 *Sonpur Mela programme*', '📅 *सोनपुर मेला कार्यक्रम*')}${lines.join('\n')}` },
-    { type: 'buttons', body: melaT(lang, 'Anything else?', 'और कुछ?'), buttons: [menuBtn(lang)] }], { log: { subtype: 'schedule', resolved: true } });
+  return melaOut(navMessages(req, snap, `${melaT(lang, '📅 *Sonpur Mela programme*', '📅 *सोनपुर मेला कार्यक्रम*')}${lines.join('\n')}`),
+    { log: { subtype: 'schedule', resolved: true } });
 }
 
 function helplineLines(snap, lang) {
@@ -388,9 +411,9 @@ function controlScreen(req, snap, allShifts) {
     }).filter(Boolean);
     if (lines.length) parts.push(`${melaT(lang, `*Officers on duty now* (${shiftLabel(sh, 'en')})`, `*अभी ड्यूटी पर अधिकारी* (${shiftLabel(sh, 'hi')})`)}\n${lines.join('\n')}`);
   }
-  const buttons = allShifts ? [menuBtn(lang)] : [{ id: 'mela:roster:control', title: melaT(lang, '🔁 All shifts', '🔁 सभी पालियाँ') }, menuBtn(lang)];
-  return melaOut([{ type: 'text', body: `${melaT(lang, '🏛️ *Sonpur Mela control room*', '🏛️ *सोनपुर मेला कंट्रोल रूम*')}\n\n${parts.join('\n\n')}` },
-    { type: 'buttons', body: melaT(lang, 'Anything else?', 'और कुछ?'), buttons }], { log: { subtype: allShifts ? 'control_roster' : 'control', resolved: true } });
+  const actions = allShifts ? [] : [actionRow('mela:roster:control', melaT(lang, '🔁 All shifts', '🔁 सभी पालियाँ'))];
+  return melaOut(navMessages(req, snap, `${melaT(lang, '🏛️ *Sonpur Mela control room*', '🏛️ *सोनपुर मेला कंट्रोल रूम*')}\n\n${parts.join('\n\n')}`, actions),
+    { log: { subtype: allShifts ? 'control_roster' : 'control', resolved: true } });
 }
 
 function placeBlock(snap, p, lang, shiftNo, allShifts, distanceM) {
@@ -419,22 +442,26 @@ function categoryScreen(req, snap, cat, allShifts) {
   const shifted = isShifted(snap, cat);
   const head = `${catIcon(cat)} *${catLabel(snap, cat, lang)}*${shifted && !allShifts ? melaT(lang, ` – on duty now (${shiftLabel(sh, 'en')})`, ` – अभी ड्यूटी पर (${shiftLabel(sh, 'hi')})`) : ''}`;
   const blocks = places.map((p, i) => `${i + 1}. ${placeBlock(snap, p, lang, sh.no, allShifts)}`);
-  const buttons = [];
-  if (places.some(hasCoords)) buttons.push({ id: `mela:near:${cat}`, title: melaT(lang, '📍 Nearest', '📍 सबसे नज़दीक') });
-  if (shifted && !allShifts) buttons.push({ id: `mela:roster:${cat}`, title: melaT(lang, '🔁 All shifts', '🔁 सभी पालियाँ') });
-  buttons.push(menuBtn(lang));
   const helpline = helplineLines(snap, lang);
-  return melaOut([{ type: 'text', body: `${head}\n\n${blocks.join('\n\n')}${helpline ? `\n\n${helpline}` : ''}` },
-    { type: 'buttons', body: melaT(lang, 'Anything else?', 'और कुछ?'), buttons }], { log: { subtype: allShifts ? `${cat}_roster` : cat, resolved: true } });
+  const body = `${head}\n\n${blocks.join('\n\n')}${helpline ? `\n\n${helpline}` : ''}`;
+  const roster = shifted && !allShifts ? { id: `mela:roster:${cat}`, title: melaT(lang, '🔁 All shifts', '🔁 सभी पालियाँ') } : null;
+  const log = { log: { subtype: allShifts ? `${cat}_roster` : cat, resolved: true } };
+  if (places.some(hasCoords)) {
+    // 📍 Nearest stays a one-tap button (the most used next step)
+    const buttons = [{ id: `mela:near:${cat}`, title: melaT(lang, '📍 Nearest', '📍 सबसे नज़दीक') }].concat(roster ? [roster] : [], [menuBtn(lang)]);
+    return melaOut(textWithButtons(body, buttons, melaT(lang, 'Anything else?', 'और कुछ?')), log);
+  }
+  return melaOut(navMessages(req, snap, body, roster ? [{ ...roster, description: '' }] : []), log);
 }
 
 function placeScreen(req, snap, p) {
   const lang = req.lang;
   const sh = currentShift(snap, req.now_ist);
-  const msgs = [{ type: 'text', body: `${catIcon(p.category)} ${placeBlock(snap, p, lang, sh.no, false)}` }];
-  if (hasCoords(p)) msgs.push({ type: 'location', lat: p.lat, lon: p.lon, name: placeName(p, lang), address: placeLocation(p, lang) });
-  msgs.push({ type: 'buttons', body: melaT(lang, 'Anything else?', 'और कुछ?'), buttons: [{ id: `mela:cat:${p.category}`, title: melaT(lang, '📋 See all', '📋 सभी देखें') }, menuBtn(lang)] });
-  return melaOut(msgs, { log: { subtype: 'place', resolved: true } });
+  const card = `${catIcon(p.category)} ${placeBlock(snap, p, lang, sh.no, false)}`;
+  // map pin first (when known), then the card with the menu in the same message
+  const pin = hasCoords(p) ? [{ type: 'location', lat: p.lat, lon: p.lon, name: placeName(p, lang), address: placeLocation(p, lang) }] : [];
+  const nav = navMessages(req, snap, card, [actionRow(`mela:cat:${p.category}`, `📋 ${catLabel(snap, p.category, lang)}`.slice(0, 24))]);
+  return melaOut(pin.concat(nav), { log: { subtype: 'place', resolved: true } });
 }
 
 // ---- places to visit ------------------------------------------------------------------------
@@ -500,15 +527,14 @@ function visitScreen(req, snap, type) {
     return types.length > 1 || type ? `*${attIcon(t)} ${attLabel(snap, t, lang)}*\n\n${items.join('\n\n')}` : items.join('\n\n');
   });
   const head = melaT(lang, '🎡 *Places to visit in Sonpur Mela*', '🎡 *सोनपुर मेले में घूमने की जगहें*');
-  const buttons = type ? [{ id: 'mela:visit', title: melaT(lang, '🎡 All places', '🎡 सभी जगहें') }, menuBtn(lang)] : [menuBtn(lang)];
-  return melaOut(textWithButtons(`${head}\n\n${groups.join('\n\n')}`, buttons, melaT(lang, 'Anything else?', 'और कुछ?')),
+  const actions = type ? [actionRow('mela:visit', melaT(lang, '🎡 All places', '🎡 सभी जगहें'))] : [];
+  return melaOut(navMessages(req, snap, `${head}\n\n${groups.join('\n\n')}`, actions),
     { log: { subtype: type ? `visit_${type}` : 'visit', resolved: true } });
 }
 
 function attractionScreen(req, snap, a) {
   const lang = req.lang;
-  const buttons = [{ id: 'mela:visit', title: melaT(lang, '🎡 Places to visit', '🎡 घूमने की जगहें') }, menuBtn(lang)];
-  return melaOut(textWithButtons(attBlock(a, lang, true), buttons, melaT(lang, 'Anything else?', 'और कुछ?')),
+  return melaOut(navMessages(req, snap, attBlock(a, lang, true), [actionRow('mela:visit', melaT(lang, '🎡 Places to visit', '🎡 घूमने की जगहें'))]),
     { log: { subtype: 'visit_place', resolved: true } });
 }
 
@@ -522,7 +548,7 @@ function rulesScreen(req, snap) {
   };
   const body = [sec('emergency', 'In an emergency', 'आपात स्थिति में', '🚨'), sec('do', "Do's", 'क्या करें', '✅'), sec('dont', "Don'ts", 'क्या न करें', '❌')].filter(Boolean).join('\n\n');
   if (!body) return melaMenu(req, snap);
-  return melaOut([{ type: 'buttons', body, buttons: [menuBtn(lang)] }], { log: { subtype: 'rules', resolved: true } });
+  return melaOut(navMessages(req, snap, body), { log: { subtype: 'rules', resolved: true } });
 }
 
 // ---- near me -------------------------------------------------------------------------------
@@ -598,12 +624,12 @@ function nearestScreen(req, snap, origin, cats, fromLandmark) {
   }
   if (!sections.length) return melaMenu(req, snap, melaT(lang, 'The location service will start soon.', 'लोकेशन सेवा जल्द शुरू होगी।'));
   const note = melaT(lang, '_Distances are straight-line and approximate; tap 🧭 for walking directions._', '_दूरी सीधी रेखा में और अनुमानित है; पैदल रास्ते के लिए 🧭 दबाएँ।_');
-  msgs.push({ type: 'text', body: `${sections.join('\n\n')}\n\n${note}` });
-  // one category: a map pin of the closest; all services: every line has its own
-  // 🧭 link, so no pin (one WhatsApp message fewer)
+  // one category: a map pin of the closest first; all services: every line has
+  // its own 🧭 link, so no pin. Then the results with the menu ("Choose") in the
+  // same message when they fit.
   if (single) msgs.push({ type: 'location', lat: nearestOverall.p.lat, lon: nearestOverall.p.lon, name: placeName(nearestOverall.p, lang), address: placeLocation(nearestOverall.p, lang) });
-  const buttons = single ? [{ id: `mela:cat:${cats[0]}`, title: melaT(lang, '📋 See all', '📋 सभी देखें') }, menuBtn(lang)] : [menuBtn(lang)];
-  msgs.push({ type: 'buttons', body: melaT(lang, 'Anything else?', 'और कुछ?'), buttons });
+  const actions = single ? [actionRow(`mela:cat:${cats[0]}`, `📋 ${melaT(lang, 'All', 'सभी')} ${catLabel(snap, cats[0], lang)}`.slice(0, 24))] : [];
+  msgs.push(...navMessages(req, snap, `${sections.join('\n\n')}\n\n${note}`, actions));
   // analytics: how far citizens are from help (bucketed; the location itself is never logged)
   const detail = `${fromLandmark ? 'landmark' : 'gps'}:${distanceBucket(nearestOverall.d)}`;
   return melaOut(msgs, { log: { subtype: single ? `near_${cats[0]}` : 'near_all', resolved: true, detail } });
@@ -948,20 +974,21 @@ function melaQaFinish(req, snap, resp) {
   // cache reads are billed at a tenth: counted that way, so the cost estimate
   // (analytics llm_usd_per_mtok) stays right
   const tokens = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + Math.round((u.cache_read_input_tokens || 0) / 10) + (u.output_tokens || 0);
-  const buttons = qaOn(s) ? [{ id: 'mela:ask', title: melaT(lang, '❓ Ask another', '❓ और सवाल') }, menuBtn(lang)] : [menuBtn(lang)];
+  const r = { ...req, lang };
+  const actions = qaOn(s) ? [actionRow('mela:ask', melaT(lang, '❓ Ask another', '❓ और सवाल'))] : [];
   const answer = data && typeof data === 'object' && data.answerable === true ? cleanAnswer(data.answer) : '';
   if (answer) {
     const ids = Array.isArray(data.place_ids) ? data.place_ids.filter((x) => typeof x === 'string').slice(0, 10) : [];
     const links = qaPlaceLinks(s, ids, lang);
     const body = [answer, links.join('\n')].filter(Boolean).join('\n\n');
-    return { messages: [{ type: 'buttons', body: body.slice(0, 1024), buttons }], next_state: null, context: {}, done: true,
+    return { messages: navMessages(r, s, body.slice(0, 1024), actions), next_state: null, context: {}, done: true,
       log: { subtype: 'ask', resolved: true, llm_tokens: tokens } };
   }
   const helpline = helplineLines(s, lang);
   const body = melaT(lang, "Sorry, I don't have that information. Please choose from the menu" + (helpline ? ` or call the control room.\n${helpline}` : '.'),
     'माफ़ कीजिए, यह जानकारी मेरे पास नहीं है। कृपया मेनू से चुनें' + (helpline ? ` या कंट्रोल रूम को फ़ोन करें।\n${helpline}` : '।'));
   const reason = !resp || !resp.error ? 'qa_no_answer' : (/llm disabled/.test(String(resp.error.message)) ? 'llm_disabled' : 'qa_error');
-  return { messages: [{ type: 'buttons', body, buttons }], next_state: null, context: {}, done: false,
+  return { messages: navMessages(r, s, body, actions), next_state: null, context: {}, done: false,
     log: { subtype: 'ask_unanswered', resolved: false, llm_tokens: tokens, unanswered_reason: reason } };
 }
 
