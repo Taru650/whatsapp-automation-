@@ -868,7 +868,7 @@ function melaQaRequest(question, qaContext, snap, model, todayIso) {
     'Use ONLY the reference below. If it does not contain the answer, set answerable to false and leave answer empty.',
     'Never invent or guess phone numbers, names of officials, prices, dates or timings. Do not write phone numbers or web links at all.',
     'Language: if the question is in Hindi or Hinglish (Hindi in Latin letters), answer in simple Hindi (Devanagari); otherwise in simple English.',
-    'Style: short and crisp, 2-4 lines, at most 450 characters, friendly. *bold* only for place names. No greetings, no repeating the question.',
+    'Style: 2-3 short lines, at most 350 characters, friendly. *bold* only for place names. No greetings, no repeating the question.',
     'For "what to see / where to go / where to buy X" questions, name the best 1-3 places from the reference.',
     'place_ids: ids in [brackets] of the places your answer tells the visitor to go to (at most 3), so the bot can add map links; [] if none.',
   ].join('\n');
