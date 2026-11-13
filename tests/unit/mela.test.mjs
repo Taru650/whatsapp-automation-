@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { validateMelaSheet, normPhone, normDate, normTime } = require('../../n8n/src/services/mela_sheet.js');
-const { melaHandle, melaQaRequest, melaQaFinish, currentShift, haversineM, detectTopic } = require('../../n8n/src/services/mela.js');
+const { melaHandle, melaQaRequest, melaQaFinish, qaReference, currentShift, haversineM, detectTopic, matchAttraction } = require('../../n8n/src/services/mela.js');
 const { validateServiceOutput } = require('../../n8n/src/core/contract.js');
 const { renderMessage } = require('../../n8n/src/core/render.js');
 
@@ -271,8 +271,8 @@ test('free text: keywords, place names, LLM intent, questions go to Q&A', () => 
   assert.deepEqual(q.qa_request, { question: 'what is the history of this fair?' });
   const q2 = melaHandle(req({ kind: 'text', text: 'Harihar Nath kab bana?' }, { state: 'mela.await_question' }), s);
   assert.ok(q2.qa_request);
-  assert.deepEqual(detectTopic('bhai paas me police chowki kahan hai'), { near: true, topic: 'thana' });
-  assert.deepEqual(detectTopic('police station kahan hai'), { near: false, topic: 'thana' }, '"where" is not "near me"');
+  assert.deepEqual(detectTopic('bhai paas me police chowki kahan hai'), { near: true, topic: 'thana', hits: ['near', 'thana'] });
+  assert.deepEqual(detectTopic('police station kahan hai'), { near: false, topic: 'thana', hits: ['thana'] }, '"where" is not "near me"');
   assert.equal(detectTopic('haathi ka doctor').topic, 'vet_camp');
   assert.equal(detectTopic('control room ka number').topic, 'control');
   assert.match(body(ok(melaHandle(req({ kind: 'text', text: 'mera bachcha kho gaya' }), s))), /control room/, 'lost child -> control room');
@@ -303,8 +303,9 @@ test('Q&A request and answer handling', () => {
   const s = snapshot();
   const r = melaQaRequest('history?', 'Sonpur Mela is held at Harihar Kshetra.', s);
   assert.equal(r.model, 'claude-haiku-5-5');
-  assert.match(r.system, /Harihar Kshetra/);
-  assert.deepEqual(r.output_config.format.schema.required, ['answerable', 'answer']);
+  assert.match(r.system[0].text, /Harihar Kshetra/);
+  assert.deepEqual(r.system[0].cache_control, { type: 'ephemeral' }, 'the reference is prompt-cached');
+  assert.deepEqual(r.output_config.format.schema.required, ['answerable', 'answer', 'place_ids']);
   for (const k of ['temperature', 'top_p', 'top_k']) assert.ok(!(k in r), `${k} must not be sent`);
   assert.equal(r.output_config.effort, 'low'); assert.ok(r.max_tokens >= 2048);
   const resp = (d) => ({ stop_reason: 'end_turn', usage: { input_tokens: 900, output_tokens: 80 },
@@ -421,4 +422,124 @@ test('toilets: a sheet that still uses the older toilet_water category is found 
   const snap = withToilets('toilet_water');
   const list = ok(melaHandle(req({ kind: 'text', text: 'washroom' }), snap));
   assert.match(list.messages.map((m) => m.body || '').join('\n'), /Gate 1 toilet block/);
+});
+
+// --- places to visit + FAQ (optional sheet tabs) ----------------------------------------
+const ATT_HEAD = ['id', 'type', 'name_en', 'name_hi', 'about_en', 'about_hi', 'location_en', 'location_hi', 'lat', 'lon',
+  'hours', 'keywords', 'active', 'verified', 'updated_by'];
+const FAQ_HEAD = ['id', 'question_en', 'question_hi', 'answer_en', 'answer_hi', 'active', 'verified', 'updated_by'];
+function visitTabs(extraAtt = [], extraFaq = []) {
+  const t = cleanTabs();
+  t.attractions = [ATT_HEAD,
+    ['A01', 'animal_bazaar', 'Ghoda Bazaar', 'घोड़ा बाज़ार', 'Horses of every breed are bought and sold here.', 'यहाँ हर नस्ल के घोड़े ख़रीदे-बेचे जाते हैं।',
+      'North of Hariharnath Temple', 'हरिहरनाथ मंदिर के उत्तर', '25.6951', '85.1782', '6 am – 6 pm', 'horse, घोड़ा, horses', 'TRUE', 'TRUE', 'x'],
+    ['A02', 'bazaar', 'Meena Bazaar', 'मीना बाज़ार', 'Clothes, bangles, household goods.', 'कपड़े, चूड़ियाँ, घरेलू सामान।', 'Main road', 'मुख्य सड़क',
+      '25.6930', '85.1760', '10 am – 10 pm', 'bangles, chudi', 'TRUE', 'TRUE', 'x'],
+    ['A03', 'food_court', 'Food Court', 'फ़ूड कोर्ट', 'Bihari food: litti chokha, malpua.', 'बिहारी व्यंजन: लिट्टी चोखा, मालपुआ।', 'Near Gate 2', 'गेट 2 के पास',
+      '', '', '', 'litti, khana', 'TRUE', 'TRUE', 'x'],
+    ...extraAtt];
+  t.faq = [FAQ_HEAD,
+    ['Q01', 'Is there an entry fee?', 'क्या प्रवेश शुल्क है?', 'No, entry to the Mela is free. For help call 06158-221084.', 'नहीं, मेले में प्रवेश निःशुल्क है।', 'TRUE', 'TRUE', 'x'],
+    ...extraFaq];
+  return t;
+}
+
+test('sheet: attractions and faq tabs are optional, validated and counted', () => {
+  const without = validateMelaSheet(cleanTabs(), {});
+  assert.deepEqual([without.counts.attractions, without.counts.faq], [0, 0]);
+  const r = validateMelaSheet(visitTabs(), {});
+  assert.deepEqual(r.errors, []);
+  assert.deepEqual([r.counts.attractions, r.counts.faq], [3, 1]);
+  const a = r.data.attractions[0];
+  assert.deepEqual([a.type, a.lat, a.lon, a.keywords], ['animal_bazaar', 25.6951, 85.1782, ['horse', 'घोड़ा', 'horses']]);
+  assert.ok(r.warnings.some((w) => w.tab === 'attractions' && /no lat\/lon/.test(w.msg)), 'food court without a pin is a warning');
+  assert.deepEqual(r.data.text_numbers, ['06158-221084'], 'a number inside an FAQ answer is registered for the phone guard');
+  const bad = validateMelaSheet(visitTabs([['A01', 'Bazaar Area!', '', '', '', '', '', '', '85.1', '25.6', '', '', 'TRUE', 'TRUE', 'x']],
+    [['Q02', 'Only a question?', '', '', '', 'TRUE', 'TRUE', 'x']]), {});
+  const msgs = bad.errors.map((e) => `${e.tab}: ${e.msg}`).join('\n');
+  for (const want of [/attractions: duplicate id "A01"/, /attractions: type "Bazaar Area!"/, /attractions: name_en or name_hi/, /attractions: lat\/lon/, /faq: answer_en or answer_hi/]) {
+    assert.match(msgs, want);
+  }
+  const missingCol = visitTabs();
+  missingCol.faq[0] = missingCol.faq[0].filter((c) => c !== 'answer_hi');
+  assert.match(validateMelaSheet(missingCol, {}).errors[0].msg, /missing column\(s\): answer_hi/);
+  const unverified = visitTabs();
+  unverified.attractions[1][ATT_HEAD.indexOf('verified')] = '';
+  assert.equal(validateMelaSheet(unverified, { requireVerified: true }).counts.attractions, 2, 'unverified rows stay out in production');
+});
+
+test('places to visit: menu row, grouped list, one-message cards with walking directions', () => {
+  const s = snapshot(visitTabs());
+  const menu = ok(melaHandle(req({ kind: 'open', id: 'mela:open' }), s));
+  assert.ok(menu.messages[0].sections[0].rows.some((r) => r.id === 'mela:visit'));
+  assert.ok(!ok(melaHandle(req({ kind: 'open', id: 'mela:open' }), snapshot())).messages[0].sections[0].rows.some((r) => r.id === 'mela:visit'),
+    'no row without data');
+  const v = ok(melaHandle(req({ kind: 'list', id: 'mela:visit' }), s));
+  assert.equal(v.messages.length, 1, 'fits in one message');
+  assert.match(body(v), /Animal markets[\s\S]*Ghoda Bazaar[\s\S]*Bazaars & shopping[\s\S]*Meena Bazaar[\s\S]*Food courts/);
+  assert.match(body(v), /🧭 https:\/\/www\.google\.com\/maps\/dir\/\?api=1&destination=25\.6951,85\.1782&travelmode=walking/);
+  const hi = ok(melaHandle(req({ kind: 'list', id: 'mela:visit' }, { lang: 'hi' }), s));
+  assert.match(body(hi), /घोड़ा बाज़ार/); assert.match(body(hi), /घूमने की जगहें/);
+  // many places -> a list of types first, then one type
+  const many = visitTabs(Array.from({ length: 6 }, (_, i) => [`B0${i}`, 'craft', `Craft stall ${i}`, '', 'Madhubani paintings', '', '', '', '', '', '', '', 'TRUE', 'TRUE', 'x']));
+  const sm = snapshot(many);
+  const types = ok(melaHandle(req({ kind: 'list', id: 'mela:visit' }), sm));
+  assert.equal(types.messages[0].type, 'list');
+  assert.deepEqual(types.messages[0].sections[0].rows.map((r) => r.id),
+    ['mela:visit:animal_bazaar', 'mela:visit:bazaar', 'mela:visit:food_court', 'mela:visit:craft', 'mela:open']);
+  const craft = ok(melaHandle(req({ kind: 'list', id: 'mela:visit:craft' }), sm));
+  assert.match(body(craft), /Art & craft/); assert.ok(!/Ghoda/.test(body(craft)));
+  assert.deepEqual(craft.messages.at(-1).buttons.map((b) => b.id), ['mela:visit', 'core:menu']);
+});
+
+test('places to visit: free text finds them in Hindi, Hinglish and English - without the AI', () => {
+  const s = { ...snapshot(visitTabs()), qa_enabled: false };
+  const card = (text, lang = 'en') => ok(melaHandle(req({ kind: 'text', text }, { lang }), s));
+  assert.match(body(card('ghoda kharidna hai')), /Ghoda Bazaar/, 'buy + horse word beats the vet-camp topic');
+  assert.match(body(card('where can i buy horses')), /Ghoda Bazaar/);
+  assert.match(body(card('घोड़ा खरीदना है', 'hi')), /घोड़ा बाज़ार/);
+  assert.match(body(card('meena bazaar kahan hai')), /Meena Bazaar[\s\S]*Clothes/);
+  assert.match(body(card('litti kahan milega')), /Food Court/);
+  assert.match(body(card('mela me ghumne ki jagah')), /Places to visit/);
+  assert.match(body(card('haathi ka doctor')), /Veterinary/, 'an animal word alone is still a vet question');
+  assert.match(body(card('Ghora Bazar thana')), /Ghora Bazar/, 'a facility named "... Bazar" stays that facility');
+  assert.doesNotMatch(body(card('Ghora Bazar thana')), /Places to visit/);
+  assert.equal(matchAttraction(s, 'kuch bhi'), null);
+  const off = card('what is the history of this fair?');
+  assert.equal(off.messages[0].type, 'list', 'AI off: menu, not a dead end');
+  assert.match(body(off), /couldn't understand/); assert.equal(off.log.unanswered_reason, 'llm_disabled');
+});
+
+test('AI answers: one compact cached reference from the whole sheet, map links added by the bot', () => {
+  const s = snapshot(visitTabs());
+  const hist = '# Title\n\n> editor note\n\n## Overview\nSonpur Mela is held at Harihar Kshetra.\n\nSource: [x](https://example.org)\n';
+  const r = melaQaRequest('  where   can I\n buy a horse?  ', hist, s, null, '2025-11-23');
+  const sys = r.system[0].text;
+  assert.match(sys, /Harihar Kshetra/); assert.doesNotMatch(sys, /editor note|example\.org|Source:/);
+  assert.match(sys, /\[A01\] Ghoda Bazaar \/ घोड़ा बाज़ार \(Animal markets\): Horses of every breed/);
+  assert.match(sys, /\[TH01\] police station: Nakash Thana/);
+  assert.match(sys, /Q: Is there an entry fee\? \/ क्या प्रवेश शुल्क है\?\nA: No, entry to the Mela is free/);
+  assert.match(sys, /today is 2025-11-23/); assert.match(sys, /2025-11-23 .*Monali Thakur/);
+  assert.doesNotMatch(sys, /2025-11-29/, 'programme: today and the next two days only');
+  assert.doesNotMatch(sys, /7090950940/, 'no duty phones in the reference');
+  assert.equal(r.messages[0].content, 'where can I buy a horse?', 'question tidied');
+  assert.ok(sys.length < 20000, `reference stays small: ${sys.length}`);
+  // same data, other question -> byte-identical system prompt (cache hit)
+  assert.equal(melaQaRequest('other?', hist, s, null, '2025-11-23').system[0].text, sys);
+  // a huge sheet is trimmed to the lines that share words with the question, and not cached
+  const big = { ...s, faq: Array.from({ length: 900 }, (_, i) => ({ id: `F${i}`, question_en: `Question number ${i} about tickets`, answer_en: 'x'.repeat(80) }))
+    .concat([{ id: 'FX', question_en: 'Is there a camel race?', answer_en: 'Yes, on 25 November.' }]) };
+  const t = qaReference('camel race kab hai', hist, big, '2025-11-23');
+  assert.equal(t.trimmed, true); assert.match(t.text, /camel race/); assert.ok(t.text.length <= 61000);
+  assert.ok(!('cache_control' in melaQaRequest('camel race kab hai', hist, big, null, '2025-11-23').system[0]));
+
+  const resp = (d) => ({ stop_reason: 'end_turn', usage: { input_tokens: 40, cache_read_input_tokens: 5000, output_tokens: 90 },
+    content: [{ type: 'text', text: JSON.stringify(d) }] });
+  const a = ok(melaQaFinish(req({}), s, resp({ answerable: true, answer: 'Go to *Ghoda Bazaar*, north of the temple.', place_ids: ['A01', 'A03', 'NOPE', 'A01'] })));
+  assert.equal(a.messages.length, 1);
+  assert.match(body(a), /^Go to \*Ghoda Bazaar\*, north of the temple\.\n\n🐎 Ghoda Bazaar – 🧭 https:\/\/www\.google\.com\/maps\/dir\/\?api=1&destination=25\.6951,85\.1782&travelmode=walking$/,
+    'only places with a pin get a link; unknown ids and duplicates ignored');
+  assert.equal(a.log.llm_tokens, 40 + 500 + 90, 'cache reads counted at a tenth');
+  const hiA = ok(melaQaFinish(req({}, { lang: 'hi' }), s, resp({ answerable: true, answer: 'घोड़ा बाज़ार जाइए।', place_ids: ['TH01'] })));
+  assert.doesNotMatch(body(hiA), /🧭/, 'a facility without coordinates gets no link');
 });

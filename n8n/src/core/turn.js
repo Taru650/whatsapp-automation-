@@ -128,10 +128,19 @@ function decideTurn(item, turn, flags) {
       return { action: 'service', env, service: route.service, pre: [],
                input: route.open ? openInput(route.service) : env.input, via: route.via || via };
     case 'llm':
-      return { action: 'llm', env };
-    case 'menu':
-    default:
+    case 'menu': {
+      // Only the home service is switched on (e.g. Mela with complaints off): there
+      // is nothing to classify, so free text goes straight to it - no classifier
+      // call, and with the AI off it still finds places by name.
+      const home = homeService(env);
+      if (route.action === 'llm' || route.reason === 'no_llm') {
+        if (home && env.services.length === 1) return { action: 'service', env, service: home, pre: [], input: env.input, via };
+      }
+      if (route.action === 'llm') return { action: 'llm', env };
       return menuOrOpen(env, [], route.reason === 'no_llm' ? { unanswered_reason: 'llm_disabled' } : {});
+    }
+    default:
+      return menuOrOpen(env, [], {});
   }
 }
 

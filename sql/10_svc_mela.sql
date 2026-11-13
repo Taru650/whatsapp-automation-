@@ -63,6 +63,34 @@ CREATE TABLE IF NOT EXISTS svc_mela.settings (
     value  text NOT NULL DEFAULT ''
 );
 
+-- Places to visit (sheet tab "attractions", optional): bazaars, food courts,
+-- exhibitions, temples ... Shown under "Places to visit" and given to the AI.
+CREATE TABLE IF NOT EXISTS svc_mela.attractions (
+    id           text PRIMARY KEY,
+    type         text NOT NULL,                  -- bazaar | food_court | exhibition | temple | ...
+    name_en      text,
+    name_hi      text,
+    about_en     text,
+    about_hi     text,
+    location_en  text,
+    location_hi  text,
+    lat          double precision,
+    lon          double precision,
+    hours        text,
+    keywords     text[] NOT NULL DEFAULT '{}',   -- extra words citizens type for it
+    sort         int NOT NULL DEFAULT 0
+);
+
+-- Approved questions and answers (sheet tab "faq", optional): AI answers only.
+CREATE TABLE IF NOT EXISTS svc_mela.faq (
+    id           text PRIMARY KEY,
+    question_en  text,
+    question_hi  text,
+    answer_en    text,
+    answer_hi    text,
+    sort         int NOT NULL DEFAULT 0
+);
+
 -- Points captured on-site by admins (plan §6.1b). The sync never touches this
 -- table; a lat/lon typed into the sheet takes precedence.
 CREATE TABLE IF NOT EXISTS svc_mela.place_coords (
@@ -81,7 +109,7 @@ CREATE TABLE IF NOT EXISTS svc_mela.qa_context (
 );
 
 -- Replace every sheet-sourced table in one transaction (the caller's).
--- p = validateMelaSheet().data: {places, duty, control, events, guidelines, settings}
+-- p = validateMelaSheet().data: {places, duty, control, events, guidelines, attractions, faq, text_numbers, settings}
 CREATE OR REPLACE FUNCTION svc_mela.replace_all(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql AS $$
 DECLARE n_numbers int;
@@ -91,6 +119,8 @@ BEGIN
     DELETE FROM svc_mela.places;
     DELETE FROM svc_mela.events;
     DELETE FROM svc_mela.guidelines;
+    DELETE FROM svc_mela.attractions;
+    DELETE FROM svc_mela.faq;
     DELETE FROM svc_mela.settings;
 
     INSERT INTO svc_mela.places (id, category, name_en, name_hi, location_en, location_hi, lat, lon, hours, notes, sort)
@@ -117,6 +147,16 @@ BEGIN
     SELECT x->>'id', x->>'kind', x->>'text_en', x->>'text_hi', coalesce((x->>'sort')::int, 0)
     FROM jsonb_array_elements(coalesce(p->'guidelines', '[]')) x;
 
+    INSERT INTO svc_mela.attractions (id, type, name_en, name_hi, about_en, about_hi, location_en, location_hi, lat, lon, hours, keywords, sort)
+    SELECT x->>'id', x->>'type', x->>'name_en', x->>'name_hi', x->>'about_en', x->>'about_hi', x->>'location_en', x->>'location_hi',
+           (x->>'lat')::float8, (x->>'lon')::float8, x->>'hours',
+           coalesce(array(SELECT jsonb_array_elements_text(x->'keywords')), '{}'), coalesce((x->>'sort')::int, 0)
+    FROM jsonb_array_elements(coalesce(p->'attractions', '[]')) x;
+
+    INSERT INTO svc_mela.faq (id, question_en, question_hi, answer_en, answer_hi, sort)
+    SELECT x->>'id', x->>'question_en', x->>'question_hi', x->>'answer_en', x->>'answer_hi', coalesce((x->>'sort')::int, 0)
+    FROM jsonb_array_elements(coalesce(p->'faq', '[]')) x;
+
     INSERT INTO svc_mela.settings (key, value)
     SELECT key, coalesce(value #>> '{}', '') FROM jsonb_each(coalesce(p->'settings', '{}'));
 
@@ -124,12 +164,15 @@ BEGIN
     n_numbers := core.register_numbers('mela', ARRAY(
         SELECT unnest(phones) FROM svc_mela.duty
         UNION SELECT unnest(phones) FROM svc_mela.control_duty
-        UNION SELECT value FROM svc_mela.settings WHERE key LIKE 'public_helpline_%' AND value <> ''));
+        UNION SELECT value FROM svc_mela.settings WHERE key LIKE 'public_helpline_%' AND value <> ''
+        -- numbers written inside FAQ answers / attraction notes (the AI may quote them)
+        UNION SELECT jsonb_array_elements_text(coalesce(p->'text_numbers', '[]'))));
 
     RETURN jsonb_build_object(
         'places', (SELECT count(*) FROM svc_mela.places), 'duty', (SELECT count(*) FROM svc_mela.duty),
         'control', (SELECT count(*) FROM svc_mela.control_duty), 'events', (SELECT count(*) FROM svc_mela.events),
-        'guidelines', (SELECT count(*) FROM svc_mela.guidelines), 'numbers', n_numbers);
+        'guidelines', (SELECT count(*) FROM svc_mela.guidelines), 'attractions', (SELECT count(*) FROM svc_mela.attractions),
+        'faq', (SELECT count(*) FROM svc_mela.faq), 'numbers', n_numbers);
 END $$;
 
 -- Everything the service needs for one turn (a few KB), as JSON.
@@ -152,6 +195,8 @@ LANGUAGE sql STABLE AS $$
                 'programme_en', programme_en, 'programme_hi', programme_hi, 'artists', artists, 'department', department,
                 'venue', venue, 'is_highlight', is_highlight) ORDER BY date, time, id) FROM svc_mela.events), '[]'),
         'guidelines', coalesce((SELECT jsonb_agg(to_jsonb(g) ORDER BY sort, id) FROM svc_mela.guidelines g), '[]'),
+        'attractions', coalesce((SELECT jsonb_agg(to_jsonb(a) ORDER BY sort, id) FROM svc_mela.attractions a), '[]'),
+        'faq', coalesce((SELECT jsonb_agg(to_jsonb(f) ORDER BY sort, id) FROM svc_mela.faq f), '[]'),
         'settings', coalesce((SELECT jsonb_object_agg(key, value) FROM svc_mela.settings), '{}')
     )
 $$;
@@ -218,11 +263,12 @@ INSERT INTO core.services (service_key, id_prefix, title_hi, title_en, descripti
                            menu_order, enabled, workflow_id, intent_hint_en, intent_hint_hi, subtypes, keywords, accepts_location)
 VALUES ('mela', 'mela', 'सोनपुर मेला', 'Sonpur Mela', 'कार्यक्रम, थाना, अस्पताल, पार्किंग, घाट', 'Programme, police, health, parking, ghats',
         10, false, 'SvcMela000000001',
-        'Anything about Sonpur Mela (Harihar Kshetra fair): programme/artists, control room, temporary police stations, health centres, veterinary camps, toilets, parking, ghats, nearest facility, rules, history and general questions.',
+        'Anything about Sonpur Mela (Harihar Kshetra fair): programme/artists, control room, temporary police stations, health centres, veterinary camps, toilets, parking, ghats, nearest facility, places to visit and bazaars, rules, history and general questions.',
         'सोनपुर मेला: कार्यक्रम, कंट्रोल रूम, थाना, अस्पताल, पशु शिविर, शौचालय, पार्किंग, घाट, नज़दीकी सुविधा, नियम, इतिहास',
         '{"today": "today''s cultural programme or artists", "schedule": "full programme schedule", "control": "control room, helpline, complaint, emergency",
           "thana": "police station / police help", "health_centre": "doctor, hospital, medical camp, ambulance", "vet_camp": "veterinary camp, animal doctor",
           "toilet": "toilets, washrooms, urinals", "parking": "where to park vehicles", "ghat": "bathing ghats", "near": "nearest facility to the user", "rules": "do''s and don''ts, what is allowed",
+          "visit": "places to visit, bazaars (horse, cattle, Meena bazaar), food courts, exhibitions, where to buy something",
           "ask": "history or any other general question about the Mela"}',
         -- registry keywords send text straight to this service (no LLM call); the
         -- service then works out the topic itself (n8n/src/services/mela.js)
@@ -233,7 +279,9 @@ VALUES ('mela', 'mela', 'सोनपुर मेला', 'Sonpur Mela', 'क�
               'parking', 'park', 'gaadi', 'पार्किंग', 'गाड़ी', 'ghat', 'snan', 'घाट', 'स्नान',
               'program', 'programme', 'singer', 'artist', 'show', 'tonight', 'aaj', 'कार्यक्रम', 'कलाकार', 'आज',
               'helpline', 'control', 'complaint', 'emergency', 'हेल्पलाइन', 'कंट्रोल', 'शिकायत',
-              'lost', 'khoya', 'खोया', 'toilet', 'toilets', 'washroom', 'bathroom', 'urinal', 'shauchalay', 'शौचालय', 'टॉयलेट', 'बाथरूम', 'hotel', 'होटल', 'near', 'nearest', 'nearby', 'नज़दीकी', 'pin'],
+              'lost', 'khoya', 'खोया', 'toilet', 'toilets', 'washroom', 'bathroom', 'urinal', 'shauchalay', 'शौचालय', 'टॉयलेट', 'बाथरूम', 'hotel', 'होटल', 'near', 'nearest', 'nearby', 'नज़दीकी', 'pin',
+              'visit', 'ghumne', 'ghoomne', 'dekhne', 'bazaar', 'bazar', 'market', 'shopping', 'kharidna', 'kharidne', 'food', 'khana',
+              'घूमने', 'देखने', 'बाज़ार', 'बाजार', 'खरीद', 'मीना', 'meena', 'ghoda', 'horse', 'घोड़ा'],
         true)
 ON CONFLICT (service_key) DO UPDATE SET
     id_prefix = EXCLUDED.id_prefix, title_hi = EXCLUDED.title_hi, title_en = EXCLUDED.title_en,

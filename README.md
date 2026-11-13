@@ -9,9 +9,12 @@ Scheme Eligibility plug in later without rebuilding the bot.
 **AI is off at launch** (`LLM_ENABLED=false`): menus and keywords answer
 everything. Switching it on (`LLM_ENABLED=true` + `ANTHROPIC_API_KEY`) lets
 **Claude Haiku 5.5** (`claude-haiku-5-5`) understand free text that matches no
-keyword and answer Mela questions from the approved text in the sheet's
-`guidelines` tab; it never states facts of its own. Citizens' typed text is then
-processed by Anthropic outside India.
+keyword and answer Mela questions in Hindi or English from the Google Sheet
+(places, places to visit, programme, guidelines, `faq` tab) and the approved
+history text; it never states facts of its own, and map links are added by the
+bot from the sheet's coordinates. Citizens' typed text is then processed by
+Anthropic outside India. "Places to visit" (sheet tab `attractions`) works with
+the AI off too.
 
 - Plan: [`docs/implementation-plan.md`](docs/implementation-plan.md)
   ([PDF](docs/Saran-Citizen-WhatsApp-Bot-Plan.pdf))

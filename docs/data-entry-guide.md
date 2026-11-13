@@ -17,6 +17,8 @@ number is wrong in the sheet, it is wrong on WhatsApp.
 | `control_room` | one desk: Magistrate, Police, Sanitation & Water, Electricity, Health · एक डेस्क |
 | `events` | one programme item (a day can have several) · एक कार्यक्रम |
 | `guidelines` | one do / don't / emergency instruction (optional) · एक निर्देश |
+| `attractions` | one place to visit: a bazaar, food court, exhibition, temple… (optional, §9) · घूमने की एक जगह |
+| `faq` | one question with its approved answer, for the AI answers (optional, §10) · एक सवाल और उसका मंज़ूर जवाब |
 | `settings` | shift start times, **public helpline number**, Mela centre point · पाली का समय, **हेल्पलाइन नंबर**, मेला केंद्र |
 
 ## 3. Shift columns / पाली कॉलम
@@ -96,3 +98,48 @@ To use it:
    - the Mela centre point
    - the 2026 programme
 4. Verify every row.
+
+## 9. Places to visit (`attractions` tab) / घूमने की जगहें
+Add a tab named exactly `attractions` with these columns in row 1:
+शीट में `attractions` नाम का टैब बनाएँ, पहली पंक्ति में ये कॉलम:
+
+`id, type, name_en, name_hi, about_en, about_hi, location_en, location_hi, lat, lon, hours, keywords, active, verified, updated_by`
+
+| Column | What to write / क्या लिखें |
+|---|---|
+| `id` | permanent short code, never reused: `A01`, `A02`… |
+| `type` | one of `animal_bazaar` (Ghoda/Gai/Haathi bazaar), `bazaar` (Meena Bazaar, shopping), `craft` (art & craft), `krishi` (agriculture stalls), `exhibition` (department stalls), `food_court`, `temple`, `cultural` (stage), `entertainment`. Another word works too; it is shown as typed. |
+| `name_en` / `name_hi` | e.g. `Ghoda Bazaar` / `घोड़ा बाज़ार` |
+| `about_en` / `about_hi` | 1–2 lines: what a visitor finds there. The bot shows it; the AI uses it. |
+| `location_en` / `location_hi` | landmark directions, e.g. `North of Hariharnath Temple` |
+| `lat` / `lon` | from Google Maps (long-press the spot → copy the numbers), e.g. `25.6951` / `85.1782`. Gives the 🧭 walking-directions link. |
+| `hours` | e.g. `6 am – 6 pm` |
+| `keywords` | other words citizens may type, comma separated: `horse, ghoda, घोड़ा, घोडा` |
+
+Citizens see a **🎡 Places to visit** row in the menu. Typing a name
+("meena bazaar") or a buy/visit sentence ("ghoda kharidna hai", "घोड़ा
+खरीदना है") opens the right card. **The AI is not needed for this.**
+मेनू में **🎡 घूमने की जगहें** दिखेगा। नाम या "ghoda kharidna hai" जैसा वाक्य
+लिखने पर सही जगह का कार्ड खुलेगा। इसके लिए AI ज़रूरी नहीं है।
+
+## 10. Questions and answers (`faq` tab) / सवाल-जवाब
+Add a tab named exactly `faq` with these columns:
+`faq` नाम का टैब, पहली पंक्ति में:
+
+`id, question_en, question_hi, answer_en, answer_hi, active, verified, updated_by`
+
+Write the questions citizens actually ask (entry fee, parking charges, how to
+reach from Patna, drinking water…) with the **approved** answer. With the AI
+switched on, the bot answers from this tab together with every other tab and
+the general history text. A phone number written in an answer is allowed to
+be sent; any other number is blocked.
+नागरिक जो सवाल सच में पूछते हैं, उनके **मंज़ूर** जवाब लिखें। AI चालू होने पर बॉट
+इसी टैब और बाकी सभी टैब से जवाब देता है।
+
+There is no "training": every answer is built from the sheet as it is right
+now (synced every 10 minutes). Fix a row, and the next answer is fixed.
+कोई "ट्रेनिंग" नहीं होती: हर जवाब शीट के मौजूदा डेटा से बनता है (हर 10 मिनट में
+सिंक)। पंक्ति सुधारें, अगला जवाब सही होगा।
+
+Both tabs are optional: until they exist the sync simply skips them. The
+same rules as the other tabs apply (unique `id`, Unicode Hindi, `verified`).

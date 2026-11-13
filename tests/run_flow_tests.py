@@ -639,7 +639,7 @@ def mela_sync_rejects_bad_sheet_and_alerts_once():
 def mela_sync_loads_clean_sheet_and_keeps_it_when_next_one_breaks():
     r = run_sync(clean_sheet())
     assert r["status"] == "ok", r["errors"]
-    assert r["counts"] == {"places": 54, "duty": 68, "control": 11, "events": 14, "guidelines": 0}, r["counts"]
+    assert r["counts"] == {"places": 54, "duty": 68, "control": 11, "events": 14, "guidelines": 0, "attractions": 0, "faq": 0}, r["counts"]
     assert scalar("select count(*) from svc_mela.places") == "54"
     broken = clean_sheet()
     broken["places"][1][broken["places"][0].index("s1_phone")] = "12345"
@@ -763,7 +763,8 @@ def mela_question_answered_from_approved_text():
     out = wait_out(u, 4)
     assert "Harihar Kshetra" in body_of(out[2]), summary(out[2])
     req = json.loads(http("GET", f"{CLAUDE}/__captured")[1])[-1]["body"]
-    assert "Harihar Kshetra" in req["system"] and "answerable" in json.dumps(req["output_config"]), "answers only from the loaded text"
+    assert "Harihar Kshetra" in json.dumps(req["system"], ensure_ascii=False) and "answerable" in json.dumps(req["output_config"]), \
+        "answers only from the loaded text"
     send(u, m_list(u, "mela:ask", "Ask"))
     wait_out(u, 5)
     send(u, m_text(u, "unknownq what is the ticket price?"))
@@ -1048,6 +1049,79 @@ def first_hi_is_one_message_greeting_on_top_of_the_mela_menu():
             assert not body_of(out[1]).startswith("🙏"), body_of(out[1])
     finally:
         sql("update core.settings set value = 'false' where key = 'welcome_in_reply'")
+
+
+ATT_HEAD = ["id", "type", "name_en", "name_hi", "about_en", "about_hi", "location_en", "location_hi", "lat", "lon",
+            "hours", "keywords", "active", "verified", "updated_by"]
+FAQ_HEAD = ["id", "question_en", "question_hi", "answer_en", "answer_hi", "active", "verified", "updated_by"]
+
+
+def sheet_with_places_to_visit():
+    t = clean_sheet()
+    t["attractions"] = [ATT_HEAD,
+        ["A01", "animal_bazaar", "Ghoda Bazaar", "घोड़ा बाज़ार", "Horses of every breed are bought and sold here.", "", "North of the temple", "",
+         "25.6951", "85.1782", "6 am - 6 pm", "horse, घोड़ा", "TRUE", "TRUE", "test"],
+        ["A02", "bazaar", "Meena Bazaar", "मीना बाज़ार", "Clothes, bangles, household goods.", "", "Main road", "", "25.6930", "85.1760",
+         "", "", "TRUE", "TRUE", "test"]]
+    # staff may capitalise a tab name: still found
+    t["FAQ"] = [FAQ_HEAD, ["Q01", "Is there an entry fee?", "", "No, entry is free.", "", "TRUE", "TRUE", "test"]]
+    return t
+
+
+@scenario(services=MELA_ONLY)
+def places_to_visit_and_ai_answers_from_the_sheet_with_complaints_off():
+    """Complaints off, Mela only: new optional tabs sync, Places to visit works without
+    the AI, and a free question goes straight to the AI (no classifier call) with
+    a map link the bot adds itself. Production setting: no "Was this helpful?" message."""
+    sql("update core.settings set value = 'false' where key = 'feedback_enabled'")
+    try:
+        _places_to_visit_and_ai_answers()
+    finally:
+        sql("update core.settings set value = 'true' where key = 'feedback_enabled'")
+
+
+def _places_to_visit_and_ai_answers():
+    r = run_sync(clean_sheet())          # a sheet without the new tabs still syncs
+    assert r["status"] == "ok", r["errors"]
+    r = run_sync(sheet_with_places_to_visit())
+    assert r["status"] == "ok" and r["counts"]["attractions"] == 2 and r["counts"]["faq"] == 1, r
+    u = user()
+    send(u, m_text(u, "hi"))
+    out = wait_out(u, 2)
+    ids = ids_of(out[1])
+    assert "mela:visit" in ids and not any(i.startswith("core:open:") for i in ids), ids
+    send(u, m_list(u, "mela:visit", "Places to visit"))
+    out = wait_out(u, 3)
+    assert "Ghoda Bazaar" in body_of(out[2]) and "destination=25.6951,85.1782" in body_of(out[2]), body_of(out[2])
+    http("POST", f"{CLAUDE}/__reset", {})
+    send(u, m_text(u, "ghoda kharidna hai"))
+    out = wait_out(u, 4)
+    assert "Ghoda Bazaar" in body_of(out[3]) and "Horses of every breed" in body_of(out[3]), body_of(out[3])
+    assert json.loads(http("GET", f"{CLAUDE}/__captured")[1]) == [], "found from the sheet, no AI call"
+    # a free question: straight to the Mela AI answer, one Claude call, link added by the bot
+    send(u, m_text(u, "is every breed available here"))
+    out = wait_out(u, 5)
+    calls = json.loads(http("GET", f"{CLAUDE}/__captured")[1])
+    assert len(calls) == 1, f"no classifier call before the answer: {len(calls)}"
+    system = json.dumps(calls[0]["body"]["system"], ensure_ascii=False)
+    assert "[A01] Ghoda Bazaar" in system and "No, entry is free." in system and calls[0]["body"]["system"][0].get("cache_control"), system[:300]
+    answer = body_of(out[4])
+    assert "🧭 https://www.google.com/maps/dir/?api=1&destination=25.6951,85.1782&travelmode=walking" in answer, answer
+    assert scalar(f"select via from core.message_log where wa_hash='{hash_of(u)}' and direction='in' order by id desc limit 1") == "text"
+    # AI switched off: a name still finds the place, anything else gets the menu
+    sql("update core.settings set value = 'false' where key = 'llm_enabled'")
+    try:
+        http("POST", f"{CLAUDE}/__reset", {})
+        v = user()
+        send(v, m_text(v, "meena bazaar"))
+        out = wait_out(v, 2)
+        assert "Meena Bazaar" in body_of(out[1]) and "Clothes" in body_of(out[1]), body_of(out[1])
+        send(v, m_text(v, "tell me something interesting"))
+        out = wait_out(v, 3)
+        assert out[2]["payload"]["interactive"]["type"] == "list" and "couldn't understand" in body_of(out[2]), summary(out[2])
+        assert json.loads(http("GET", f"{CLAUDE}/__captured")[1]) == [], "no AI call when it is off"
+    finally:
+        sql("update core.settings set value = 'true' where key = 'llm_enabled'")
 
 
 @scenario(services=COMPLAINT_ONLY)

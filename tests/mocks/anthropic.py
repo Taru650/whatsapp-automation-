@@ -13,6 +13,7 @@ GET /__captured lists received requests; POST /__reset clears them.
 """
 import argparse
 import json
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -68,9 +69,17 @@ class Handler(BaseHTTPRequestHandler):
         if any(k in req for k in ("temperature", "top_p", "top_k")):
             return self._send(400, {"type": "error", "error": {"type": "invalid_request_error", "message": "sampling parameters are not supported for this model"}})
         schema = req["output_config"]["format"].get("schema", {})
-        if "answerable" in schema.get("properties", {}):  # Mela Q&A over the approved text
+        if "answerable" in schema.get("properties", {}):  # Mela Q&A over the sheet + approved text
             known = "unknownq" not in text.lower()
             out = {"answerable": known, "answer": "Sonpur Mela is held at Harihar Kshetra, where the Ganga and Gandak meet." if known else ""}
+            if "place_ids" in schema.get("properties", {}):
+                # ids of reference lines ("- [ID] ...") sharing a word with the question
+                system = req.get("system")
+                ref = system if isinstance(system, str) else "\n".join(b.get("text", "") for b in system or [])
+                words = {w for w in re.findall(r"\w{4,}", text.lower())}
+                ids = [m.group(1) for m in re.finditer(r"^- \[(\w+)\] (.*)$", ref, re.M)
+                       if words & set(re.findall(r"\w{4,}", m.group(2).lower()))]
+                out["place_ids"] = ids[:3] if known else []
         else:
             out = classify(text)
         self._send(200, {
