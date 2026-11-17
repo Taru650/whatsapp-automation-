@@ -31,7 +31,7 @@ return [{ json: { code: ok ? 200 : 403, body: ok ? String(q['hub.challenge'] || 
     { webhookId: '4f1c2b8e-9a51-4d7e-8f3a-000000000002' });
   const explode = w.code('Verify & Explode', {
     mode: 'runOnceForAllItems',
-    modules: ['core/signature.js', 'core/explode.js', 'core/normalize.js'],
+    modules: ['core/signature.js', 'core/explode.js', 'core/normalize.js', 'core/voice.js'],
     main: `
 const crypto = require('crypto');
 const first = $input.first();
@@ -46,14 +46,35 @@ const headers = first.json.headers || {};
 if (!verifySignature(raw, headers['x-hub-signature-256'], $env.META_APP_SECRET, crypto)) {
   return []; // unsigned or forged request: drop silently, never reply
 }
-return explodeWebhook(first.json.body).map((m) => ({
+const items = explodeWebhook(first.json.body).map((m) => ({
   // sent_ms: when the citizen sent it (WhatsApp's own clock), to skip messages
   // Meta delivers late after an outage (turn.js decideTurn)
   json: { wa_id: m.wa_id, msg_id: m.msg_id, sent_ms: Number(m.timestamp) * 1000 || null, input: normalizeMessage(m.message) },
 }));
+// Voice notes (only while VOICE_ENABLED=true): speech-to-text, then the words go
+// down the same path as a typed message. A failure keeps it "unsupported" with a
+// voice_error, and the citizen is asked to speak again or type.
+if (String($env.VOICE_ENABLED || 'false') === 'true') {
+  const store = $getWorkflowStaticData('global');
+  const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const cfg = { graph: { base: $env.WA_API_BASE, version: $env.GRAPH_API_VERSION, token: $env.WHATSAPP_ACCESS_TOKEN },
+    saJson: $env.GOOGLE_SA_JSON, tokenUrl: $env.GOOGLE_TOKEN_URL, sttBase: $env.STT_API_BASE,
+    language: $env.STT_LANGUAGE || 'hi-IN', altLanguages: String($env.STT_ALT_LANGUAGES ?? 'en-IN').split(',').map((x) => x.trim()) };
+  const fresh = (it) => !it.json.sent_ms || Date.now() - it.json.sent_ms < 15 * 60000; // late ones get no reply anyway
+  for (const it of items) {
+    const inp = it.json.input;
+    if (inp.raw_type !== 'audio' || !fresh(it)) continue;
+    if (!voiceAllowed(store, Number($env.VOICE_DAILY_CAP || 1000), today)) { it.json.input = { ...inp, voice_error: 'daily_cap' }; continue; }
+    const r = await transcribeVoice(inp.media_id, inp.mime, cfg, this.helpers.httpRequest.bind(this.helpers), crypto);
+    it.json.input = r.error
+      ? { ...inp, voice_error: r.error }
+      : { ...normalizeMessage({ type: 'text', text: { body: r.text } }), voice: true, raw_type: 'audio' };
+  }
+}
+return items;
 ` });
   const begin = w.pg('Begin Turn', 'select core.rpc_begin_turn($1::jsonb) as turn',
-    "={{ [ JSON.stringify({ wa_id: $json.wa_id, msg_id: $json.msg_id, kind: $json.input.kind, text: $json.input.text, lang_guess: $json.input.lang_guess, hash_secret: $env.PHONE_HASH_SECRET, enc_key: $env.PGCRYPTO_KEY }) ] }}");
+    "={{ [ JSON.stringify({ wa_id: $json.wa_id, msg_id: $json.msg_id, kind: $json.input.voice ? 'voice' : $json.input.kind, text: $json.input.text, lang_guess: $json.input.lang_guess, hash_secret: $env.PHONE_HASH_SECRET, enc_key: $env.PGCRYPTO_KEY }) ] }}");
   const decide = w.code('Decide', { modules: TURN_MODULES, main: `
 const src = $('Verify & Explode').item.json;
 const d = decideTurn(src, $json.turn, { llmEnv: String($env.LLM_ENABLED ?? 'true') !== 'false', nowMs: Date.now() });

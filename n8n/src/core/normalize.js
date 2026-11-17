@@ -50,8 +50,14 @@ function normalizeMessage(message) {
       if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return base;
       return { ...base, kind: 'location', lat, lon };
     }
+    case 'audio': {
+      // still "unsupported" here: the router turns it into text only while voice
+      // notes are switched on (core/voice.js), otherwise the usual polite reply
+      const a = m.audio || {};
+      return { ...base, media_id: a.id || null, mime: a.mime_type || null, voice_note: !!a.voice };
+    }
     default:
-      return base; // audio, voice, image, video, sticker, document, contacts, reaction, ...
+      return base; // video, sticker, contacts, reaction, ...
   }
 }
 

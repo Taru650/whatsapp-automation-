@@ -95,6 +95,15 @@ function menuOrOpen(env, pre, extra) {
 // one of our messages) need no reply at all.
 function unsupportedTurn(env) {
   if (env.input.raw_type === 'reaction') return { action: 'stop', reason: 'reaction' };
+  // a voice note the speech-to-text could not make out (voice notes switched on)
+  if (env.input.voice_error) {
+    const msg = [{ type: 'text', body: t(env, 'voice_not_understood') }];
+    if (env.state) {
+      return { action: 'reply', env, pre: [], messages: msg, state: env.state, context: env.context, service_key: null, done: false,
+               subtype: 'voice_not_understood', unanswered_reason: `voice:${String(env.input.voice_error).split(':')[0]}` };
+    }
+    return menuOrOpen(env, msg, { subtype: 'voice_not_understood', unanswered_reason: `voice:${String(env.input.voice_error).split(':')[0]}` });
+  }
   if (env.state) {
     return { action: 'reply', env, pre: [], messages: [{ type: 'text', body: t(env, 'unsupported_flow') }],
              state: env.state, context: env.context, service_key: null, done: false, subtype: 'unsupported' };
@@ -237,6 +246,14 @@ function finalizeTurn(decision, result) {
   const coreCtx = { ...env.core_ctx };
   const messages = [];
   const reply = [...(decision.pre || []), ...(r.messages || [])];
+  // Voice note: show what was heard on top of the answer (same message), so a
+  // misheard question is obvious and the citizen can simply type it instead.
+  if (env.input.voice && env.input.text && reply[0] && WELCOME_CARRIERS.has(reply[0].type) && typeof reply[0].body === 'string') {
+    const heard = `🎤 “${env.input.text.slice(0, 200)}”`;
+    if (heard.length + 2 + reply[0].body.length <= (reply[0].type === 'text' ? 4096 : 1024)) {
+      reply[0] = { ...reply[0], body: `${heard}\n\n${reply[0].body}` };
+    }
+  }
   if (env.first_contact) {
     // The greeting goes on top of the first reply (usually the menu): one
     // WhatsApp message instead of two (Meta charges per message). A separate
@@ -271,7 +288,7 @@ function finalizeTurn(decision, result) {
       in_msg_id: env.msg_id,
       service_key: serviceKey,
       subtype: log.subtype || decision.subtype || null,
-      via: decision.via || (env.input.kind === 'text' ? 'text' : env.input.kind),
+      via: env.input.voice ? 'voice' : (decision.via || (env.input.kind === 'text' ? 'text' : env.input.kind)),
       resolved: log.resolved != null ? !!log.resolved : !(decision.unanswered_reason || log.unanswered_reason),
       detail: log.detail || null,
       // classifier tokens (router) + any tokens the service spent itself (e.g. Q&A)

@@ -37,6 +37,7 @@ MEDIA_FIXTURES = {
     "MEDIA_PDF_1": {"mime_type": "application/pdf", "file_size": 2048, "bytes": b"%PDF-1.4 fake-pdf-bytes"},
     "MEDIA_TOOBIG_1": {"mime_type": "image/jpeg", "file_size": 11 * 1024 * 1024, "bytes": b""},
     "MEDIA_BADTYPE_1": {"mime_type": "video/mp4", "file_size": 1024, "bytes": b"fake-video-bytes"},
+    "VOICE_SILENT": {"mime_type": "audio/ogg; codecs=opus", "file_size": 120, "bytes": b"OggS" + b"\0" * 24 + b"OpusHead\x01\x01\x38\x01\x80\x3e\x00\x00" + b"\0" * 64},
 }
 
 
@@ -117,6 +118,19 @@ def validate(p):
     return errs
 
 
+def voice_fixture(media_id):
+    """VOICE_<hex of UTF-8 text>: a fake WhatsApp voice note (OGG/Opus header at
+    16 kHz) whose bytes carry the words the mock speech-to-text "hears"."""
+    if not media_id.startswith("VOICE_") or media_id == "VOICE_SILENT":
+        return None
+    try:
+        said = bytes.fromhex(media_id[6:])
+    except ValueError:
+        return None
+    body = b"OggS" + b"\0" * 24 + b"OpusHead\x01\x01\x38\x01\x80\x3e\x00\x00" + b"\0" * 32 + b"SAY:" + said
+    return {"mime_type": "audio/ogg; codecs=opus", "file_size": len(body), "bytes": body}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -134,7 +148,8 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 return self._send(200, CAPTURED)
         if self.path.startswith("/__media/"):
-            meta = MEDIA_FIXTURES.get(self.path[len("/__media/"):])
+            mid = self.path[len("/__media/"):]
+            meta = MEDIA_FIXTURES.get(mid) or voice_fixture(mid)
             if not meta:
                 return self._send(404, {"error": "not found"})
             body = meta["bytes"]
@@ -146,7 +161,7 @@ class Handler(BaseHTTPRequestHandler):
         # GET /<version>/<media-id>: Graph's media metadata lookup (one path segment, not .../messages)
         parts = self.path.strip("/").split("/")
         if len(parts) == 2 and parts[0].startswith("v"):
-            meta = MEDIA_FIXTURES.get(parts[1])
+            meta = MEDIA_FIXTURES.get(parts[1]) or voice_fixture(parts[1])
             if not meta:
                 return self._send(404, {"error": {"message": "media not found", "type": "GraphMethodException", "code": 100}})
             port = self.server.server_address[1]

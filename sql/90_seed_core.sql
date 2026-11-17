@@ -40,6 +40,8 @@ INSERT INTO core.templates (key, hi, en, max_len) VALUES
   ('menu_section',       'सेवाएँ', 'Services', 24),
   ('unsupported',        'माफ़ कीजिए, मैं अभी केवल लिखे हुए संदेश और बटन समझ सकता हूँ। कृपया टाइप करें या मेनू से चुनें।',
                          'Sorry, I can only understand typed messages and button taps for now. Please type or choose from the menu.', 1024),
+  ('voice_not_understood', '🎤 माफ़ कीजिए, आपका वॉइस नोट समझ नहीं आया। कृपया धीरे और साफ़ बोलकर छोटा (1 मिनट से कम) वॉइस नोट भेजें, या सवाल लिखकर भेजें।',
+                         '🎤 Sorry, I couldn''t understand that voice note. Please send a short one (under 1 minute), speaking slowly and clearly, or type your question.', 1024),
   ('unsupported_flow',   'माफ़ कीजिए, मैं इस तरह का संदेश नहीं पढ़ सकता। कृपया ऊपर वाले चरण को जारी रखें – जवाब लिखकर भेजें या बटन दबाएँ।',
                          'Sorry, I can''t read this kind of message. Please continue with the step above – type your answer or tap a button.', 1024),
   ('rate_limited',       'आप बहुत तेज़ी से संदेश भेज रहे हैं। कृपया कुछ मिनट बाद फिर कोशिश करें।',

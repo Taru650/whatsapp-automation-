@@ -36,7 +36,7 @@ const MELA_KEYWORDS = [
   ['accommodation', /\b(hotel|stay|dharamshala|lodge|accommodation|thaharna|rukna)\b|होटल|धर्मशाला|ठहर|रुकन/],
   ['toilet', /\b(toilet|toilets|washroom|bathroom|urinal|latrine|loo|shauchalay|shauchalaya|sauchalay|peshab|pakhana)\b|शौचालय|पेशाब|पाखाना|बाथरूम|टॉयलेट/],
   ['toilet_water', /\b(water|pani|paani)\b|पानी/],
-  ['today', /\b(today|aaj|aj|tonight|program|programme|schedule|event|show|artist|singer|performance)\b|आज|कार्यक्रम|कलाकार|प्रोग्राम/],
+  ['today', /\b(today|aaj|aj|tonight|program|programme|schedule|event|show|artist|artists|singer|performance|star|stars|celebrity)\b|आज|कार्यक्रम|कलाकार|प्रोग्राम|स्टार|गायक|सेलिब्रिटी/],
   ['rules', /\b(rule|rules|dos|donts|allowed|banned|mana|niyam)\b|नियम|मना|क्या करें/],
   // places to visit / buy / eat (last: "see a doctor" stays a health question). No temple
   // words: "mandir kab khulta hai" is a question for the AI; a temple is found by its name.
@@ -165,9 +165,13 @@ function detectTopic(text) {
   const t = normalise(text);
   const hits = MELA_KEYWORDS.filter(([, re]) => re.test(t)).map(([k]) => k);
   const near = hits.includes('near');
-  const topic = hits.find((k) => k !== 'near') || null;
+  let topic = hits.find((k) => k !== 'near') || null;
+  // "agle 3 din ke program", "kaun se bade star aane wale hain": the whole
+  // schedule (highlights marked ⭐), not just today's
+  if (topic === 'today' && SCHEDULE_HINT.test(t) && !/\b(today|aaj|aj|tonight)\b|आज/.test(t.replace(/आज\s*(से|के बाद)/g, ''))) topic = 'schedule';
   return { near, topic, hits };
 }
+const SCHEDULE_HINT = /\b(next|agle|agla|kal|tomorrow|all|sare|saare|sabhi|poora|pura|schedule|upcoming|aane|star|stars|celebrity|week|din)\b|अगले|अगला|कल|सारे|सभी|पूरा|पूरे|सूची|आने वाले|आएंगे|आएँगे|स्टार|सेलिब्रिटी|दिन|हफ़्ते|हफ्ते/;
 
 // Attraction named in the text. byName: its full name (en or hi) appears;
 // otherwise one of its sheet keywords, or its name without the generic word
@@ -855,9 +859,9 @@ function qaSections(qaContext, snap, todayIso) {
   const places = (snap.places || []).map((p) => `- [${p.id}] ${catLabel(snap, p.category, 'en', true)}: ${bothNames(p.name_en, p.name_hi)}`
     + `${lang1(p.location_en, p.location_hi) ? `, ${lang1(p.location_en, p.location_hi)}` : ''}${p.hours ? ` (hours: ${cleanText(p.hours)})` : ''}`);
   if (places.length) sections.push({ key: 'places', title: 'Facilities (police, health, toilets, parking, ghats…)', lines: places });
-  const until = todayIso ? new Date(Date.parse(`${todayIso}T00:00:00Z`) + 2 * 864e5).toISOString().slice(0, 10) : null;
-  const events = (snap.events || []).filter((e) => !todayIso || (e.date >= todayIso && e.date <= until))
-    .map((e) => `- ${e.date} ${e.time || ''} ${cleanText(e.programme_en || e.programme_hi || '')}${e.artists ? ` – ${cleanText(e.artists)}` : ''}${e.venue ? ` @ ${cleanText(e.venue)}` : ''}`.replace(/\s+/g, ' '));
+  // every programme from today on (⭐ = highlight / star artist), at most 80 lines
+  const events = (snap.events || []).filter((e) => !todayIso || e.date >= todayIso).slice(0, 80)
+    .map((e) => `- ${e.is_highlight ? '⭐ ' : ''}${e.date} ${e.time || ''} ${cleanText(e.programme_en || e.programme_hi || '')}${e.artists ? ` – ${cleanText(e.artists)}` : ''}${e.venue ? ` @ ${cleanText(e.venue)}` : ''}`.replace(/\s+/g, ' '));
   if (events.length) sections.push({ key: 'events', title: todayIso ? `Cultural programme (today is ${todayIso})` : 'Cultural programme', lines: events });
   const guide = (snap.guidelines || []).map((g) => `- [${g.kind}] ${lang1(g.text_en, g.text_hi)}`);
   if (guide.length) sections.push({ key: 'guidelines', title: 'Visitor guidelines', lines: guide });

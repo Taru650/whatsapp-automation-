@@ -6,10 +6,13 @@
 * GET  /v4/spreadsheets/<id>?fields=sheets.properties.title -> the tab names
 * GET  /v4/spreadsheets/<id>/values:batchGet?ranges=..  -> tabs set via /__set
   (401 without the bearer token; 400 if a requested tab does not exist, like Google)
+* POST /v1/speech:recognize  Speech-to-Text: the "audio" carries SAY:<words> (graph mock voice
+  fixtures); no SAY -> no results; "mumble" -> confidence 0.1. Last request at GET /__stt
 * POST /__set   {"tabs": {...}}   replace the sheet content
 * POST /__fail  {"status": 500}   make the next batchGet fail (0 = stop failing)
 """
 import argparse
+import base64
 import json
 import threading
 import urllib.parse
@@ -40,6 +43,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200 if ok else 400, {"access_token": "mock-token", "expires_in": 3600, "token_type": "Bearer"}
                               if ok else {"error": "invalid_grant"})
         body = json.loads(raw or b"{}")
+        if self.path == "/v1/speech:recognize":
+            if self.headers.get("Authorization") != "Bearer mock-token":
+                return self._send(401, {"error": {"code": 401, "message": "unauthenticated"}})
+            cfg = body.get("config", {})
+            if cfg.get("encoding") != "OGG_OPUS" or cfg.get("sampleRateHertz") not in (8000, 12000, 16000, 24000, 48000):
+                return self._send(400, {"error": {"code": 400, "message": "bad config"}})
+            audio = base64.b64decode(body.get("audio", {}).get("content", ""))
+            with LOCK:
+                STATE["stt"] = {"config": cfg, "bytes": len(audio)}
+            if b"SAY:" not in audio:
+                return self._send(200, {"totalBilledTime": "1s"})
+            said = audio.split(b"SAY:", 1)[1].decode("utf-8")
+            conf = 0.1 if "mumble" in said else 0.92
+            return self._send(200, {"results": [{"alternatives": [{"transcript": said, "confidence": conf}], "languageCode": cfg.get("languageCode")}],
+                                    "totalBilledTime": "5s"})
         with LOCK:
             if self.path == "/__set":
                 STATE["tabs"] = body.get("tabs", {})
@@ -53,6 +71,8 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         if url.path == "/__calls":
             return self._send(200, {"calls": STATE["calls"]})
+        if url.path == "/__stt":
+            return self._send(200, STATE.get("stt") or {})
         parts = url.path.split("/")
         is_meta = len(parts) == 4 and parts[1] == "v4" and parts[2] == "spreadsheets"
         if not (url.path.endswith("/values:batchGet") or is_meta):

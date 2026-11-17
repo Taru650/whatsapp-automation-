@@ -84,8 +84,15 @@ def m_location(wa_id, lat=25.6912, lon=85.1720):
     return {"from": wa_id, "id": next_id(), "timestamp": str(int(time.time())), "type": "location", "location": {"latitude": lat, "longitude": lon}}
 
 
-def m_audio(wa_id):
-    return {"from": wa_id, "id": next_id(), "timestamp": str(int(time.time())), "type": "audio", "audio": {"id": "media1", "mime_type": "audio/ogg"}}
+def m_video(wa_id):
+    return {"from": wa_id, "id": next_id(), "timestamp": str(int(time.time())), "type": "video", "video": {"id": "media1", "mime_type": "video/mp4"}}
+
+
+def m_voice(wa_id, said=None):
+    """A WhatsApp voice note; the mocks "hear" `said` (None = silence)."""
+    media = "VOICE_" + said.encode("utf-8").hex() if said else "VOICE_SILENT"
+    return {"from": wa_id, "id": next_id(), "timestamp": str(int(time.time())), "type": "audio",
+            "audio": {"id": media, "mime_type": "audio/ogg; codecs=opus", "voice": True}}
 
 
 def m_image(wa_id, media_id="MEDIA_IMAGE_1", mime="image/jpeg", caption=None):
@@ -291,6 +298,60 @@ def message_delivered_late_gets_no_reply():
     assert len(wait_out(u, 1)) >= 1
 
 
+@scenario(services=("mela",))
+def voice_note_is_answered_like_typed_text():
+    """Voice notes on (VOICE_ENABLED=true in tests): speech-to-text, then the same
+    screens as typed text, with what was heard shown on top of the answer."""
+    run_sync(clean_sheet())
+    sql("update core.settings set value = 'false' where key = 'feedback_enabled'")
+    try:
+        u = user()
+        send(u, m_voice(u, "पुलिस स्टेशन कहाँ है"))
+        out = wait_out(u, 2)
+        wait_quiet(2)
+        out = out_to(u)
+        text = json.dumps([c["payload"] for c in out], ensure_ascii=False)
+        assert "🎤 “पुलिस स्टेशन कहाँ है”" in text and "Nakash Thana" in text, text[:400]
+        stt = json.loads(http("GET", f"{SHEETS}/__stt")[1])
+        assert stt["config"]["languageCode"] == "hi-IN" and stt["config"]["sampleRateHertz"] == 16000, stt
+        assert sql(f"select kind, via, text from core.message_log where wa_hash='{hash_of(u)}' and direction='in'") == \
+            [["voice", "voice", "पुलिस स्टेशन कहाँ है"]]
+        # a free spoken question goes to the AI (on in tests) with the transcript
+        http("POST", f"{CLAUDE}/__reset", {})
+        n = len(out_to(u))
+        send(u, m_voice(u, "मेला का इतिहास क्या है"))
+        wait_out(u, n + 1)
+        wait_quiet(2)
+        last = out_to(u)[-1]
+        assert body_of(last).startswith("🎤 “मेला का इतिहास क्या है”") and "Harihar Kshetra" in body_of(last), body_of(last)
+        assert json.loads(http("GET", f"{CLAUDE}/__captured")[1])[-1]["body"]["messages"][0]["content"] == "मेला का इतिहास क्या है"
+        # silence / mumbling: one clear "please speak again or type", plus the menu - never a guess
+        for said in (None, "mumble mumble"):
+            v = user()
+            send(v, m_voice(v, said))
+            out = wait_out(v, 2)
+            wait_quiet(2)
+            out = out_to(v)
+            assert "वॉइस नोट समझ नहीं आया" in body_of(out[1]) or "couldn't understand that voice note" in body_of(out[1]), summary(out[1])
+            assert out[-1]["payload"]["interactive"]["type"] == "list", "then the menu"
+            assert scalar(f"select reason from core.unanswered where wa_hash='{hash_of(v)}'").startswith("voice:"), "kept for review"
+        # mid-step (waiting for a location): a failed voice note keeps the step
+        w = user()
+        send(w, m_list(w, "mela:near", "Near me")); wait_out(w, 2)
+        send(w, m_voice(w, None))
+        wait_out(w, 3)
+        assert scalar(f"select state from core.sessions where wa_hash='{hash_of(w)}'") == "mela.await_location"
+        # a voice note sent long ago (delivered late after an outage): no transcription, no reply
+        x = user()
+        late = m_voice(x, "पुलिस स्टेशन कहाँ है")
+        late["timestamp"] = str(int(time.time()) - 3 * 3600)
+        send(x, late)
+        wait_quiet(4)
+        assert out_to(x) == []
+    finally:
+        sql("update core.settings set value = 'true' where key = 'feedback_enabled'")
+
+
 @scenario
 def batched_webhook_answers_every_message():
     a, b = user(), user()
@@ -323,10 +384,10 @@ def status_callback_does_nothing():
 
 
 @scenario
-def voice_note_gets_polite_redirect():
+def unreadable_message_gets_polite_redirect():
     # outside any step: the apology, then the menu
     v = user()
-    send(v, m_audio(v))
+    send(v, m_video(v))
     out = wait_out(v, 3)
     # (no text yet to guess the language from: the Hindi default)
     assert "लिखे हुए संदेश" in body_of(out[1]) or "typed messages" in body_of(out[1]), summary(out[1])
@@ -334,7 +395,7 @@ def voice_note_gets_polite_redirect():
     # in the middle of a step (the echo service waits for text): the step is kept, no menu
     u = user()
     send(u, m_text(u, "hi")); wait_out(u, 2)
-    send(u, m_audio(u))
+    send(u, m_video(u))
     out = wait_out(u, 3)
     wait_quiet(2)
     out = out_to(u)
@@ -1169,7 +1230,7 @@ def unreadable_message_mid_complaint_keeps_the_complaint():
         send(u, msg)
         wait_out(u, n)
     assert scalar(f"select state from core.sessions where wa_hash='{hash_of(u)}'") == "cmp.evidence"
-    send(u, m_audio(u))
+    send(u, m_video(u))
     out = wait_out(u, 6)
     assert "step above" in body_of(out[5]) or "चरण" in body_of(out[5]), summary(out[5])
     assert scalar(f"select state from core.sessions where wa_hash='{hash_of(u)}'") == "cmp.evidence", "complaint not dropped"

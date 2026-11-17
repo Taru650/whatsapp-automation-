@@ -528,7 +528,8 @@ test('AI answers: one compact cached reference from the whole sheet, map links a
   assert.match(sys, /\[TH01\] police station: Nakash Thana/);
   assert.match(sys, /Q: Is there an entry fee\? \/ क्या प्रवेश शुल्क है\?\nA: No, entry to the Mela is free/);
   assert.match(sys, /today is 2025-11-23/); assert.match(sys, /2025-11-23 .*Monali Thakur/);
-  assert.doesNotMatch(sys, /2025-11-29/, 'programme: today and the next two days only');
+  assert.match(sys, /2025-11-29/, 'programme: every coming day (stars asked about can be days away)');
+  assert.doesNotMatch(sys, /2025-11-22/, 'past programmes left out');
   assert.doesNotMatch(sys, /7090950940/, 'no duty phones in the reference');
   assert.equal(r.messages[0].content, 'where can I buy a horse?', 'question tidied');
   assert.ok(sys.length < 20000, `reference stays small: ${sys.length}`);
