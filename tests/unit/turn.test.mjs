@@ -168,6 +168,18 @@ test('home service alone (complaints off): free text goes straight to it - no cl
   assert.equal(decideTurn(q, turn({ services: [echo], settings: { home_service: 'mela', llm_enabled: 'true' } }), flags).action, 'llm');
 });
 
+test('late delivery: a message sent long before it arrives gets no reply (Meta retries for days after an outage)', () => {
+  const now = flags.nowMs;
+  const at = (minAgo) => ({ ...item({ kind: 'text', text: 'toilet kahan hai' }), sent_ms: now - minAgo * 60000 });
+  assert.notEqual(decideTurn(at(2), turn(), flags).action, 'stop', 'normal delay: answered');
+  assert.deepEqual(decideTurn(at(16), turn(), flags), { action: 'stop', reason: 'stale' }, 'over 15 min: silence');
+  assert.deepEqual(decideTurn(at(60 * 24 * 3), turn(), flags), { action: 'stop', reason: 'stale' }, 'days late: silence');
+  // the limit is a setting; a bad value falls back to 15 minutes
+  assert.notEqual(decideTurn(at(16), turn({ settings: { stale_after_min: '30' } }), flags).action, 'stop');
+  assert.equal(decideTurn(at(16), turn({ settings: { stale_after_min: 'abc' } }), flags).action, 'stop');
+  assert.notEqual(decideTurn(item({ kind: 'text', text: 'hi' }), turn(), flags).action, 'stop', 'no timestamp: answered');
+});
+
 test('unreadable messages (voice, video, sticker): a step in progress is kept, reactions get no reply', () => {
   const T2 = { ...TEMPLATES, unsupported_flow: { en: 'flow_en' } };
   for (const raw of ['audio', 'video', 'sticker']) {

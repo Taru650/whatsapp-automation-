@@ -102,8 +102,22 @@ function unsupportedTurn(env) {
   return menuOrOpen(env, [{ type: 'text', body: t(env, 'unsupported') }], { subtype: 'unsupported' });
 }
 
+// A message Meta delivers long after it was sent (it retries for up to 7 days
+// while the bot is unreachable) gets no reply: answering hours late looks like
+// the bot messaging the citizen out of nowhere. core.settings stale_after_min.
+const STALE_AFTER_MIN = 15;
+
+function isStale(item, turn, flags) {
+  const sent = Number(item && item.sent_ms);
+  if (!sent) return false;
+  const raw = Number((turn.settings || {}).stale_after_min);
+  const limitMin = Number.isFinite(raw) && raw > 0 ? raw : STALE_AFTER_MIN;
+  return ((flags && flags.nowMs) || Date.now()) - sent > limitMin * 60000;
+}
+
 function decideTurn(item, turn, flags) {
   if (!turn || turn.is_dup) return { action: 'stop', reason: 'duplicate' };
+  if (isStale(item, turn, flags)) return { action: 'stop', reason: 'stale' };
   const env = buildEnv(item, turn, flags);
   if (turn.rate_limited) {
     if (!turn.rate_notice) return { action: 'stop', reason: 'rate_limited' };

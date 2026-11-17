@@ -47,7 +47,9 @@ if (!verifySignature(raw, headers['x-hub-signature-256'], $env.META_APP_SECRET, 
   return []; // unsigned or forged request: drop silently, never reply
 }
 return explodeWebhook(first.json.body).map((m) => ({
-  json: { wa_id: m.wa_id, msg_id: m.msg_id, input: normalizeMessage(m.message) },
+  // sent_ms: when the citizen sent it (WhatsApp's own clock), to skip messages
+  // Meta delivers late after an outage (turn.js decideTurn)
+  json: { wa_id: m.wa_id, msg_id: m.msg_id, sent_ms: Number(m.timestamp) * 1000 || null, input: normalizeMessage(m.message) },
 }));
 ` });
   const begin = w.pg('Begin Turn', 'select core.rpc_begin_turn($1::jsonb) as turn',

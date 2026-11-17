@@ -8,6 +8,11 @@ ON CONFLICT (key) DO NOTHING;
 -- keywords only until midnight. ~3000 calls ≈ ₹60-100.
 INSERT INTO core.settings (key, value) VALUES ('llm_daily_cap', '3000')
 ON CONFLICT (key) DO NOTHING;
+-- A message delivered more than this many minutes after the citizen sent it
+-- (Meta retries for days while the bot is unreachable) gets no reply, so nobody
+-- receives answers and menus hours later "out of nowhere".
+INSERT INTO core.settings (key, value) VALUES ('stale_after_min', '15')
+ON CONFLICT (key) DO NOTHING;
 -- "hi" opens the Sonpur Mela menu directly; the other services (File a
 -- Complaint) are rows in it. Set to '' to go back to the 2-button main menu.
 INSERT INTO core.settings (key, value) VALUES ('home_service', 'mela')

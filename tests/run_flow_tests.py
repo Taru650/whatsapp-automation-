@@ -71,32 +71,32 @@ def m_text(wa_id, text, mid=None):
 
 
 def m_button(wa_id, bid, title="x", mid=None):
-    return {"from": wa_id, "id": mid or next_id(), "timestamp": "1", "type": "interactive",
+    return {"from": wa_id, "id": mid or next_id(), "timestamp": str(int(time.time())), "type": "interactive",
             "interactive": {"type": "button_reply", "button_reply": {"id": bid, "title": title}}}
 
 
 def m_list(wa_id, rid, title="x"):
-    return {"from": wa_id, "id": next_id(), "timestamp": "1", "type": "interactive",
+    return {"from": wa_id, "id": next_id(), "timestamp": str(int(time.time())), "type": "interactive",
             "interactive": {"type": "list_reply", "list_reply": {"id": rid, "title": title}}}
 
 
 def m_location(wa_id, lat=25.6912, lon=85.1720):
-    return {"from": wa_id, "id": next_id(), "timestamp": "1", "type": "location", "location": {"latitude": lat, "longitude": lon}}
+    return {"from": wa_id, "id": next_id(), "timestamp": str(int(time.time())), "type": "location", "location": {"latitude": lat, "longitude": lon}}
 
 
 def m_audio(wa_id):
-    return {"from": wa_id, "id": next_id(), "timestamp": "1", "type": "audio", "audio": {"id": "media1", "mime_type": "audio/ogg"}}
+    return {"from": wa_id, "id": next_id(), "timestamp": str(int(time.time())), "type": "audio", "audio": {"id": "media1", "mime_type": "audio/ogg"}}
 
 
 def m_image(wa_id, media_id="MEDIA_IMAGE_1", mime="image/jpeg", caption=None):
     img = {"id": media_id, "mime_type": mime}
     if caption is not None:
         img["caption"] = caption
-    return {"from": wa_id, "id": next_id(), "timestamp": "1", "type": "image", "image": img}
+    return {"from": wa_id, "id": next_id(), "timestamp": str(int(time.time())), "type": "image", "image": img}
 
 
 def m_document(wa_id, media_id="MEDIA_PDF_1", mime="application/pdf"):
-    return {"from": wa_id, "id": next_id(), "timestamp": "1", "type": "document", "document": {"id": media_id, "mime_type": mime}}
+    return {"from": wa_id, "id": next_id(), "timestamp": str(int(time.time())), "type": "document", "document": {"id": media_id, "mime_type": mime}}
 
 
 def post(payload, signature=None):
@@ -278,6 +278,20 @@ def duplicate_delivery_answered_once():
 
 
 @scenario
+def message_delivered_late_gets_no_reply():
+    """After an outage Meta re-delivers old messages for days: answering them hours
+    late looks like the bot messaging people out of nowhere."""
+    u = user()
+    old = m_text(u, "hi")
+    old["timestamp"] = str(int(time.time()) - 3 * 3600)   # sent 3 hours ago
+    send(u, old)
+    wait_quiet(4)
+    assert out_to(u) == [], [summary(c) for c in out_to(u)]
+    send(u, m_text(u, "hi"))                               # a fresh message is answered as usual
+    assert len(wait_out(u, 1)) >= 1
+
+
+@scenario
 def batched_webhook_answers_every_message():
     a, b = user(), user()
     payload = envelope([m_text(a, "hi")], a)
@@ -333,7 +347,7 @@ def voice_note_gets_polite_redirect():
 def emoji_reaction_gets_no_reply():
     u = user()
     send(u, m_text(u, "hi")); wait_out(u, 2)
-    send(u, {"from": u, "id": next_id(), "timestamp": "1", "type": "reaction", "reaction": {"message_id": "wamid.X", "emoji": "👍"}})
+    send(u, {"from": u, "id": next_id(), "timestamp": str(int(time.time())), "type": "reaction", "reaction": {"message_id": "wamid.X", "emoji": "👍"}})
     wait_quiet(4)
     assert len(out_to(u)) == 2, [summary(c) for c in out_to(u)]
 
