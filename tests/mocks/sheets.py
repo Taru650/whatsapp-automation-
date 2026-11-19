@@ -42,6 +42,22 @@ class Handler(BaseHTTPRequestHandler):
                 len((form.get("assertion") or [""])[0].split(".")) == 3
             return self._send(200 if ok else 400, {"access_token": "mock-token", "expires_in": 3600, "token_type": "Bearer"}
                               if ok else {"error": "invalid_grant"})
+        if self.path == "/speech-to-text":   # Sarvam AI: multipart upload
+            if self.headers.get("api-subscription-key") != "test-sarvam-key":
+                return self._send(403, {"error": {"message": "Invalid API key", "code": "invalid_api_key_error"}})
+            ctype = self.headers.get("Content-Type", "")
+            if "multipart/form-data" not in ctype or b'name="file"' not in raw or b'name="model"' not in raw:
+                return self._send(400, {"error": {"message": "file and model are required"}})
+            model = raw.split(b'name="model"', 1)[1].split(b"\r\n\r\n", 1)[1].split(b"\r\n", 1)[0].decode()
+            lang = raw.split(b'name="language_code"', 1)[1].split(b"\r\n\r\n", 1)[1].split(b"\r\n", 1)[0].decode() \
+                if b'name="language_code"' in raw else None
+            with LOCK:
+                STATE["stt"] = {"provider": "sarvam", "model": model, "language_code": lang, "bytes": len(raw),
+                                "ogg": b"OggS" in raw}
+            if b"SAY:" not in raw:
+                return self._send(200, {"request_id": "r1", "transcript": "", "language_code": lang})
+            said = raw.split(b"SAY:", 1)[1].split(b"\r\n--", 1)[0].decode("utf-8")
+            return self._send(200, {"request_id": "r1", "transcript": said, "language_code": lang})
         body = json.loads(raw or b"{}")
         if self.path == "/v1/speech:recognize":
             if self.headers.get("Authorization") != "Bearer mock-token":

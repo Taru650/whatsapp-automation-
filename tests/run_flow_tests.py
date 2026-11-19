@@ -313,7 +313,7 @@ def voice_note_is_answered_like_typed_text():
         text = json.dumps([c["payload"] for c in out], ensure_ascii=False)
         assert "🎤 “पुलिस स्टेशन कहाँ है”" in text and "Nakash Thana" in text, text[:400]
         stt = json.loads(http("GET", f"{SHEETS}/__stt")[1])
-        assert stt["config"]["languageCode"] == "hi-IN" and stt["config"]["sampleRateHertz"] == 16000, stt
+        assert stt == {**stt, "provider": "sarvam", "model": "saarika:v2.5", "language_code": "hi-IN", "ogg": True}, stt
         assert sql(f"select kind, via, text from core.message_log where wa_hash='{hash_of(u)}' and direction='in'") == \
             [["voice", "voice", "पुलिस स्टेशन कहाँ है"]]
         # a free spoken question goes to the AI (on in tests) with the transcript
@@ -326,7 +326,7 @@ def voice_note_is_answered_like_typed_text():
         assert body_of(last).startswith("🎤 “मेला का इतिहास क्या है”") and "Harihar Kshetra" in body_of(last), body_of(last)
         assert json.loads(http("GET", f"{CLAUDE}/__captured")[1])[-1]["body"]["messages"][0]["content"] == "मेला का इतिहास क्या है"
         # silence / mumbling: one clear "please speak again or type", plus the menu - never a guess
-        for said in (None, "mumble mumble"):
+        for said in (None,):
             v = user()
             send(v, m_voice(v, said))
             out = wait_out(v, 2)

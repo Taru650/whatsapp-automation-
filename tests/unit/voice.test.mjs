@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { transcribeVoice, sttRequest, sttResult, opusSampleRate, voiceAllowed } = require('../../n8n/src/core/voice.js');
+const { transcribeVoice, downloadAudio, sarvamResult, sttRequest, sttResult, opusSampleRate, voiceAllowed } = require('../../n8n/src/core/voice.js');
 const { normalizeMessage } = require('../../n8n/src/core/normalize.js');
 const { decideTurn, finalizeTurn } = require('../../n8n/src/core/turn.js');
 const { validateMelaSheet, MELA_TABS } = require('../../n8n/src/services/mela_sheet.js');
@@ -71,6 +71,29 @@ test('transcribe: download -> Google -> text; every failure is a short reason, n
   assert.equal((await transcribeVoice(null, 'audio/ogg', cfg, ok.http, crypto)).error, 'no_media');
   const noSa = await transcribeVoice('M1', 'audio/ogg', { ...cfg, saJson: '' }, ok.http, crypto);
   assert.match(noSa.error, /^stt_failed/);
+});
+
+test('Sarvam: the reply is read safely - transcript, empty, errors, odd shapes', () => {
+  assert.deepEqual(sarvamResult({ statusCode: 200, body: { request_id: 'r', transcript: ' पुलिस  स्टेशन कहाँ है ', language_code: 'hi-IN' } }),
+    { text: 'पुलिस स्टेशन कहाँ है', language: 'hi-IN' });
+  assert.deepEqual(sarvamResult({ statusCode: 200, body: '{"transcript":"toilet kahan hai"}' }), { text: 'toilet kahan hai', language: null });
+  assert.equal(sarvamResult({ statusCode: 200, body: { transcript: '' } }).error, 'not_understood');
+  assert.equal(sarvamResult({ statusCode: 403, body: { error: { message: 'Invalid API key' } } }).error, 'stt_failed:403');
+  assert.equal(sarvamResult({ statusCode: 400, body: { error: { message: 'Audio duration exceeds the limit of 30 seconds' } } }).error, 'too_long');
+  assert.equal(sarvamResult({ statusCode: 429, body: {} }).error, 'stt_failed:429');
+  assert.equal(sarvamResult({ error: { message: 'ETIMEDOUT' } }).error, 'stt_failed:network');
+  assert.equal(sarvamResult(null).error, 'not_understood');
+  assert.equal(sarvamResult({ statusCode: 200, body: { transcript: 'x'.repeat(2000) } }).text.length, 500);
+});
+
+test('audio download (Sarvam path): bytes back, or a short reason', async () => {
+  const ok = fakeHttp({});
+  const a = await downloadAudio('M1', 'audio/ogg; codecs=opus', { token: 'wa' }, ok.http);
+  assert.ok(Buffer.isBuffer(a.buf) && a.buf.includes('OpusHead'));
+  assert.equal((await downloadAudio('M1', 'audio/ogg', { token: 'wa' }, fakeHttp({}, { size: 5 * 1024 * 1024 }).http)).error, 'too_long');
+  assert.equal((await downloadAudio('M1', 'image/jpeg', { token: 'wa' }, ok.http)).error, 'unsupported_audio');
+  const broken = async () => { throw Object.assign(new Error('x'), { statusCode: 404 }); };
+  assert.equal((await downloadAudio('M1', 'audio/ogg', { token: 'wa' }, broken)).error, 'media_lookup_failed:404');
 });
 
 test('daily cap: counts per IST day, resets next day, 0 = no voice notes', () => {

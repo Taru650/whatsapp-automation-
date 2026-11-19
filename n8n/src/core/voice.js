@@ -2,10 +2,12 @@
 // the same path as a typed one. Used only by the router's "Verify & Explode"
 // step, and only while VOICE_ENABLED=true.
 //
-// Speech-to-text: Google Cloud Speech-to-Text v1 (speech:recognize). It takes
-// WhatsApp's OGG/Opus voice notes as they are (no conversion) in a JSON body,
-// which a Code node can send, and it authenticates with the same Google service
-// account the sheet sync already uses (GOOGLE_SA_JSON).
+// Speech-to-text, STT_PROVIDER:
+//   sarvam (default): Sarvam AI (Indian; Hindi/English and mixed speech). The
+//     audio is a multipart upload, so the router sends it with n8n's own HTTP
+//     Request node (a Code node cannot upload bytes); sarvamResult() reads the reply.
+//   google: Google Cloud Speech-to-Text v1, JSON body, sent from the Code node
+//     with the sheet's service account (transcribeVoice()).
 //
 // Pure helpers (no fs, crypto passed in) so they are unit-testable; the caller
 // passes `http` = this.helpers.httpRequest.
@@ -82,7 +84,47 @@ function why(e) {
   return String((e && (e.httpCode || e.statusCode || e.status || e.code)) || r.status || r.statusCode || 'error').slice(0, 20);
 }
 
-// One voice note -> { text, confidence } or { error }.
+// The voice note's bytes from WhatsApp -> { buf } or { error }.
+async function downloadAudio(mediaId, mime, g, http) {
+  if (!mediaId) return { error: 'no_media' };
+  if (mime && !AUDIO_MIME.test(String(mime))) return { error: 'unsupported_audio' };
+  const graphBase = `${g.base || 'https://graph.facebook.com'}/${g.version || 'v23.0'}`;
+  let meta;
+  try {
+    meta = await http({ method: 'GET', url: `${graphBase}/${mediaId}`, json: true, timeout: 10000, headers: { Authorization: `Bearer ${g.token}` } });
+  } catch (e) {
+    return { error: `media_lookup_failed:${why(e)}` };
+  }
+  if (!meta || !meta.url) return { error: 'media_lookup_failed' };
+  if (meta.file_size && Number(meta.file_size) > MAX_AUDIO_BYTES) return { error: 'too_long' };
+  try {
+    const res = await http({ method: 'GET', url: meta.url, timeout: 20000, encoding: 'arraybuffer', returnFullResponse: true,
+      headers: { Authorization: `Bearer ${g.token}` } });
+    if (!res || !res.body || typeof res.body === 'string') return { error: 'download_failed' };
+    const buf = Buffer.isBuffer(res.body) ? res.body : Buffer.from(res.body);
+    return buf.length > MAX_AUDIO_BYTES ? { error: 'too_long' } : { buf };
+  } catch (e) {
+    return { error: `download_failed:${why(e)}` };
+  }
+}
+
+// Sarvam speech-to-text reply (n8n HTTP Request node, full response) ->
+// { text } or { error }. Sarvam gives no confidence score: an empty transcript
+// is the only "not understood".
+function sarvamResult(res) {
+  const r = res || {};
+  const status = Number(r.statusCode || 0);
+  const body = r.body && typeof r.body === 'object' ? r.body : (() => { try { return JSON.parse(r.body); } catch (e) { return {}; } })();
+  if (status && status >= 300) {
+    const msg = JSON.stringify(body || {}).toLowerCase();
+    return { error: /duration|too long|exceed|30 sec|limit/.test(msg) && status === 400 ? 'too_long' : `stt_failed:${status}` };
+  }
+  if (r.error && !status) return { error: 'stt_failed:network' };
+  const text = String((body && (body.transcript || (body.data && body.data.transcript))) || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+  return text ? { text, language: body.language_code || null } : { error: 'not_understood' };
+}
+
+// One voice note -> { text, confidence } or { error }  (Google provider)
 // cfg: { graph: {base, version, token}, saJson, tokenUrl, sttBase, language, altLanguages }
 async function transcribeVoice(mediaId, mime, cfg, http, crypto) {
   if (!mediaId) return { error: 'no_media' };
@@ -136,5 +178,5 @@ function voiceAllowed(store, cap, todayIst) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { transcribeVoice, sttRequest, sttResult, opusSampleRate, googleToken, voiceAllowed, MELA_PHRASES, MAX_AUDIO_BYTES };
+  module.exports = { transcribeVoice, downloadAudio, sarvamResult, sttRequest, sttResult, opusSampleRate, googleToken, voiceAllowed, MELA_PHRASES, MAX_AUDIO_BYTES };
 }

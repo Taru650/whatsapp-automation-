@@ -54,6 +54,9 @@ const items = explodeWebhook(first.json.body).map((m) => ({
 // Voice notes (only while VOICE_ENABLED=true): speech-to-text, then the words go
 // down the same path as a typed message. A failure keeps it "unsupported" with a
 // voice_error, and the citizen is asked to speak again or type.
+// Sarvam (default): the audio is attached here and uploaded by the "Speech to
+// Text" HTTP node; Google: transcribed right here.
+const provider = String($env.STT_PROVIDER || 'sarvam').toLowerCase();
 if (String($env.VOICE_ENABLED || 'false') === 'true') {
   const store = $getWorkflowStaticData('global');
   const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
@@ -65,6 +68,13 @@ if (String($env.VOICE_ENABLED || 'false') === 'true') {
     const inp = it.json.input;
     if (inp.raw_type !== 'audio' || !fresh(it)) continue;
     if (!voiceAllowed(store, Number($env.VOICE_DAILY_CAP || 1000), today)) { it.json.input = { ...inp, voice_error: 'daily_cap' }; continue; }
+    if (provider === 'sarvam') {
+      const a = await downloadAudio(inp.media_id, inp.mime, cfg.graph, this.helpers.httpRequest.bind(this.helpers));
+      if (a.error) { it.json.input = { ...inp, voice_error: a.error }; continue; }
+      it.json.stt = 'sarvam';
+      it.binary = { audio: { data: a.buf.toString('base64'), mimeType: 'audio/ogg', fileName: 'voice.ogg' } };
+      continue;
+    }
     const r = await transcribeVoice(inp.media_id, inp.mime, cfg, this.helpers.httpRequest.bind(this.helpers), crypto);
     it.json.input = r.error
       ? { ...inp, voice_error: r.error }
@@ -73,17 +83,48 @@ if (String($env.VOICE_ENABLED || 'false') === 'true') {
 }
 return items;
 ` });
-  const begin = w.pg('Begin Turn', 'select core.rpc_begin_turn($1::jsonb) as turn',
-    "={{ [ JSON.stringify({ wa_id: $json.wa_id, msg_id: $json.msg_id, kind: $json.input.voice ? 'voice' : $json.input.kind, text: $json.input.text, lang_guess: $json.input.lang_guess, hash_secret: $env.PHONE_HASH_SECRET, enc_key: $env.PGCRYPTO_KEY }) ] }}");
-  const decide = w.code('Decide', { modules: TURN_MODULES, main: `
+  // Sarvam voice notes only: upload the audio, then read the words back into
+  // the message; everything else goes straight on.
+  const isVoice = w.switchOn('Voice Note?', 2, "={{ $json.stt === 'sarvam' ? 1 : 0 }}");
+  const stt = w.add('Speech to Text', 'n8n-nodes-base.httpRequest', 4.3, {
+    method: 'POST',
+    url: "={{ ($env.SARVAM_API_BASE || 'https://api.sarvam.ai') + '/speech-to-text' }}",
+    sendHeaders: true,
+    headerParameters: { parameters: [{ name: 'api-subscription-key', value: '={{ $env.SARVAM_API_KEY }}' }] },
+    sendBody: true,
+    contentType: 'multipart-form-data',
+    bodyParameters: { parameters: [
+      { name: 'model', value: "={{ $env.SARVAM_STT_MODEL || 'saarika:v2.5' }}" },
+      { name: 'language_code', value: "={{ $env.STT_LANGUAGE || 'hi-IN' }}" },
+      { parameterType: 'formBinaryData', name: 'file', inputDataFieldName: 'audio' },
+    ] },
+    options: { timeout: 20000, response: { response: { fullResponse: true, neverError: true } } },
+  }, { onError: 'continueRegularOutput', y: 200 });
+  const useText = w.code('Use Transcript', { modules: ['core/normalize.js', 'core/voice.js'], main: `
 const src = $('Verify & Explode').item.json;
+const r = sarvamResult($json);
+const input = r.error
+  ? { ...src.input, voice_error: r.error }
+  : { ...normalizeMessage({ type: 'text', text: { body: r.text } }), voice: true, raw_type: 'audio' };
+const { stt, ...rest } = src;
+return { json: { ...rest, input } };
+` }, { y: 200 });
+  // src rides along so "Decide" sees the transcribed message on both paths
+  const begin = w.pg('Begin Turn', 'select core.rpc_begin_turn($1::jsonb) as turn, $2::jsonb as src',
+    "={{ [ JSON.stringify({ wa_id: $json.wa_id, msg_id: $json.msg_id, kind: $json.input.voice ? 'voice' : $json.input.kind, text: $json.input.text, lang_guess: $json.input.lang_guess, hash_secret: $env.PHONE_HASH_SECRET, enc_key: $env.PGCRYPTO_KEY }), JSON.stringify($json) ] }}");
+  const decide = w.code('Decide', { modules: TURN_MODULES, main: `
+const src = $json.src;
 const d = decideTurn(src, $json.turn, { llmEnv: String($env.LLM_ENABLED ?? 'true') !== 'false', nowMs: Date.now() });
 const route = { stop: 0, reply: 1, service: 2, llm: 3 }[d.action];
 // service calls carry the service's input at the top level plus the turn in _router
 return { json: d.action === 'service' ? { ...serviceInput(d), _router: d, route } : { ...d, route } };
 ` });
   const route = w.switchOn('Route', 4, '={{ $json.route }}');
-  w.chain(post, explode, begin, decide, route);
+  w.chain(post, explode, isVoice);
+  w.connect(isVoice, begin, 0);
+  w.connect(isVoice, stt, 1);
+  w.chain(stt, useText, begin);
+  w.chain(begin, decide, route);
 
   // LLM branch (free text with no pending state)
   const classify = w.execute('Classify (LLM)', IDS.llm, { wait: true }, { y: 300 });
